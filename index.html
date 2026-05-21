@@ -29,7 +29,7 @@
 import { createElement as h, useState, useEffect } from 'https://esm.sh/react@18';
 import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import htm from 'https://esm.sh/htm@3';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'https://esm.sh/recharts@2?deps=react@18,react-dom@18';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineChart, Line, CartesianGrid, Legend } from 'https://esm.sh/recharts@2?deps=react@18,react-dom@18';
 const html = htm.bind(h);
 
 // ═══ CONSTANTS ═══════════════════════════════════════════════════════════════
@@ -244,6 +244,16 @@ function App() {
     }
   };
 
+  // Lösch-Funktion für vergangene Spiele
+  const deleteGame = (id) => {
+    if(confirm('Möchtest du dieses Spiel wirklich unwiderruflich aus der Historie löschen?')) {
+      const newGames = games.filter(g => g.id !== id);
+      saveGames(newGames, roster);
+      // Falls das gelöschte Spiel gerade in der Progress-Ansicht ausgewählt war, setzen wir das zurück
+      if (sPl) setSPl(null); 
+    }
+  };
+
   const syncBadge = html`<span style=${{fontSize:11,color:syncSt==='ok'?C.green:syncSt==='error'?C.red:C.muted}}>
     ${syncSt==='syncing'?'↻ Sync…':syncSt==='ok'?`☁ ${syncMsg}`:syncSt==='error'?'⚠ Sync-Fehler':''}
   </span>`;
@@ -255,7 +265,7 @@ function App() {
       <${Game} ...${{game:cur,roster,onTurn:()=>setModal(true),onFinish:finishGame,onUndo:undoLastTurn,onAbort:abortGame,onBack:()=>setScreen('home')}}/>
       ${modal && html`<${TurnModal} ...${{game:cur,roster,onRecord:recordTurn,onClose:()=>setModal(false)}}/>`}
     `}
-    ${screen==='stats' && html`<${Stats} ...${{games,roster,tab:stab,setTab:setStab,selPlayer:sPl,setSelPlayer:setSPl,cmp:sCmp,setCmp:setSCmp,onBack:()=>setScreen('home')}}/>`}
+    ${screen==='stats' && html`<${Stats} ...${{games,roster,tab:stab,setTab:setStab,selPlayer:sPl,setSelPlayer:setSPl,cmp:sCmp,setCmp:setSCmp,onBack:()=>setScreen('home'), onDeleteGame:deleteGame}}/>`}
     ${screen==='gh'    && html`<${GhSettings} initial=${ghCfg} onSave=${cfg=>{setGhCfg(cfg);lsSet('tt:gh',cfg);if(cfg)doSync(cfg);setScreen('home');}} onBack=${()=>setScreen('home')}/>`}
   </div>`;
 }
@@ -380,7 +390,7 @@ function GameSetup({roster,onStart,onBack}) {
   </div>`;
 }
 
-// ═══ GAME UI ═════════════════════════════════════════════════════════════════
+// ═══ GAME UI (TABELLEN PRO SPIELERIN) ════════════════════════════════════════
 
 function Game({game, roster, onTurn, onFinish, onUndo, onAbort, onBack}) {
   const over = isOver(game);
@@ -388,17 +398,7 @@ function Game({game, roster, onTurn, onFinish, onUndo, onAbort, onBack}) {
   const maxT = Math.max(...game.players.map(total));
   const diff = maxT - total(cp);
 
-  const flatTurns = game.players.flatMap(p=>p.turns.map(t=>({...t, name:p.name})));
-  // Für die History weben wir die Züge in chronologischer Reihenfolge zusammen (Runde für Runde)
-  const history = [];
-  const maxRounds = Math.max(...game.players.map(p=>p.turns.length));
-  for (let r=maxRounds-1; r>=0; r--) {
-    for (let i=game.players.length-1; i>=0; i--) {
-      if (game.players[i].turns[r]) {
-        history.push({...game.players[i].turns[r], name:game.players[i].name});
-      }
-    }
-  }
+  const totalRounds = Math.max(...game.players.map(p => p.turns.length), 0);
 
   return html`<div style=${{maxWidth:460,margin:'0 auto',display:'flex',flexDirection:'column',height:'100vh'}}>
     <div style=${{padding:'16px 16px 12px',background:C.bg,borderBottom:`1px solid ${C.border}`,zIndex:10}}>
@@ -424,33 +424,35 @@ function Game({game, roster, onTurn, onFinish, onUndo, onAbort, onBack}) {
     </div>
 
     <div style=${{flex:1,overflowY:'auto',padding:'16px',display:'flex',flexDirection:'column'}}>
-      ${history.length===0 && html`<div style=${{textAlign:'center',color:C.muted,marginTop:40,fontSize:13}}>Noch keine Züge.</div>`}
-      <div style=${{display:'flex',flexDirection:'column',gap:0}}>
-        ${history.map((t,i) => {
-          const ci=roster.indexOf(t.name);
-          const card=CARDS.find(c=>c.id===t.card);
-          return html`<div key=${i} style=${{display:'flex',alignItems:'center',gap:10,
-            padding:'7px 0',borderBottom:`1px solid ${C.border}`}}>
-            <div style=${{fontSize:14,fontWeight:900,color:i===0?C.amberL:C.muted2,minWidth:22}}>${i+1}.</div>
-            <div style=${{flex:1,minWidth:0}}>
-              <span style=${{color:PCL[ci%PC.length],fontSize:13,fontWeight:600}}>${t.name}</span>
-              ${t.tuttoCycles>0 && html`<span style=${{fontSize:9,background:'#052e16',color:'#86efac',borderRadius:4,padding:'2px 5px',marginLeft:6}}>${t.tuttoCycles===1?'TUTTO':`${t.tuttoCycles}× TUTTO`}</span>`}
-            </div>
-            <div style=${{display:'flex',alignItems:'center',gap:6}}>
-              ${t.cards ? t.cards.map((cid, cidx) => {
-                const c = CARDS.find(x => x.id === cid);
-                return c ? html`<span key=${cidx} style=${{fontSize:13}} title=${c.label}>${c.emoji}</span>` : null;
-              }) : (card && html`<span style=${{fontSize:13}} title=${card.label}>${card.emoji}</span>`)}
-              ${t.bust && html`<span style=${{fontSize:9,background:'#7f1d1d',color:'#fca5a5',borderRadius:4,padding:'2px 5px'}}>Niete</span>`}
-              ${t.isDeduction && html`<span style=${{fontSize:9,background:'#1a0030',color:'#c4b5fd',borderRadius:4,padding:'2px 5px'}}>⊕ Abzug</span>`}
-              ${t.instant&& html`<span style=${{fontSize:9,background:'#14532d',color:'#86efac',borderRadius:4,padding:'2px 5px'}}>🍀 Sieg</span>`}
-              <span style=${{fontSize:15,fontWeight:800,color:t.bust?C.red:t.score<0?C.red:t.score>0?C.text:C.muted,minWidth:52,textAlign:'right'}}>
-                ${t.bust?'—':t.score>0?`+${fmtN(t.score)}`:t.score<0?t.score.toLocaleString('de-DE'):'-'}
-              </span>
-            </div>
-          </div>`;
-        })}
-      </div>
+      ${totalRounds === 0 ? html`<div style=${{textAlign:'center',color:C.muted,marginTop:40,fontSize:13}}>Noch keine Züge gespielt.</div>` : html`
+        <div style=${{display:'flex', gap:12, overflowX:'auto', paddingBottom:16, alignItems:'flex-start'}}>
+          ${game.players.map((p, i) => {
+            const vTurns = p.turns.map((t, idx) => ({...t, round: idx+1})).filter(t => t.score !== 0);
+            
+            return html`
+              <div key=${p.name} style=${{flex:'0 0 auto', minWidth:130, background:C.surface, borderRadius:12, padding:'12px', border:`1px solid ${C.border}`}}>
+                <div style=${{fontSize:14, fontWeight:800, color:PCL[i%PC.length], marginBottom:10, textAlign:'center', borderBottom:`1px solid ${C.border}`, paddingBottom:8}}>
+                  ${p.name}
+                </div>
+                <div style=${{display:'flex', flexDirection:'column', gap:6, minHeight:50}}>
+                  ${vTurns.map(t => html`
+                    <div key=${t.round} style=${{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:13}}>
+                      <span style=${{color:C.muted2, fontSize:11}}>R${t.round}</span>
+                      ${t.tuttoCycles>0 && html`<span style=${{fontSize:9,background:'#052e16',color:'#86efac',borderRadius:4,padding:'1px 4px'}}>${t.tuttoCycles}xT</span>`}
+                      <span style=${{fontWeight:700, color:t.score>0 ? C.text : C.red}}>${t.score>0?'+':''}${fmtN(t.score)}</span>
+                    </div>
+                  `)}
+                  ${vTurns.length === 0 ? html`<div style=${{color:C.muted, fontSize:11, textAlign:'center', padding:'10px 0'}}>Keine Punkte</div>` : null}
+                </div>
+                <div style=${{marginTop:10, borderTop:`1px solid ${C.border}`, paddingTop:10, display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                  <span style=${{fontSize:11, color:C.muted, textTransform:'uppercase', letterSpacing:1}}>Total</span>
+                  <span style=${{fontSize:16, fontWeight:900, color:PCL[i%PC.length]}}>${fmtN(total(p))}</span>
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+      `}
     </div>
 
     <div style=${{padding:'16px',background:C.bg,borderTop:`1px solid ${C.border}`,zIndex:10}}>
@@ -471,10 +473,10 @@ function Game({game, roster, onTurn, onFinish, onUndo, onAbort, onBack}) {
   </div>`;
 }
 
-// ═══ TURN MODAL (NEU, SCHRITTWEISE & FESTE PUNKTE) ═══════════════════════════
+// ═══ TURN MODAL ══════════════════════════════════════════════════════════════
 
 function TurnModal({game, roster, onRecord, onClose}) {
-  const [step, setStep] = useState('draw'); // 'draw' | 'play' | 'interim'
+  const [step, setStep] = useState('draw'); 
   const [history, setHistory] = useState([]);
   const [currentCard, setCurrentCard] = useState(null);
   const [base, setBase] = useState('');
@@ -493,14 +495,19 @@ function TurnModal({game, roster, onRecord, onClose}) {
     const totalBase = hist.reduce((s,h)=>s+h.baseScore, 0);
     const totalBonus = hist.reduce((s,h)=>s+h.bonusScore, 0);
     
-    // Bei Niete werden auch Abzüge nicht gewertet, die in diesem Zug gesammelt wurden
     const finalDeduct = isBust ? [] : deductNames;
+    const cardsDrawnCount = hist.length;
+    const lastCard = hist[hist.length - 1];
+    const isStopCard = lastCard?.card === 'stop';
 
     onRecord({
       score: isBust ? 0 : totalScore,
       baseScore: isBust ? 0 : totalBase,
       bonusScore: isBust ? 0 : totalBonus,
       bust: isBust,
+      isStop: isStopCard,
+      isInitialStop: isStopCard && cardsDrawnCount === 1,
+      cardsDrawn: cardsDrawnCount,
       tuttoCycles: hist.filter(h=>h.isTutto).length,
       card: hist.length > 0 ? hist[0].card : (currentCard ? currentCard.id : null),
       cards: hist.map(h=>h.card),
@@ -509,7 +516,6 @@ function TurnModal({game, roster, onRecord, onClose}) {
   };
 
   const handleBust = () => {
-    // Fügt die aktuelle Karte als gescheitert zur Historie hinzu und beendet den Zug
     const newHist = [...history, {
       card: currentCard.id, score: 0, baseScore: 0, bonusScore: 0, isTutto: false
     }];
@@ -535,7 +541,6 @@ function TurnModal({game, roster, onRecord, onClose}) {
       cardScore = b + bonusVal;
     } 
     else if (currentCard.id === 'x2') {
-      // x2 verdoppelt alle bisher in diesem Zug gesammelten Punkte plus die neuen Base-Punkte
       baseSc = b;
       cardScore = turnScore + (2 * b);
       bonusSc = cardScore - baseSc;
@@ -545,7 +550,6 @@ function TurnModal({game, roster, onRecord, onClose}) {
     } 
     else if (currentCard.id === 'plusminus') {
       baseSc = 0; bonusSc = 1000; cardScore = 1000;
-      // Führende ermitteln und für den Abzug merken
       const tots = game.players.map(p=>({name:p.name,t:p.turns.reduce((s,t) => s+t.score, 0)}));
       const max = Math.max(...tots.map(t=>t.t));
       if (max > 0) {
@@ -561,7 +565,6 @@ function TurnModal({game, roster, onRecord, onClose}) {
   };
 
   const handleFeuerwerk = () => {
-    // Feuerwerk endet immer sofort nach Eingabe der Punkte
     const b = parseInt(base) || 0;
     finishTurn([...history, {
       card: currentCard.id, baseScore: b, bonusScore: 0, score: b, isTutto: false
@@ -569,19 +572,18 @@ function TurnModal({game, roster, onRecord, onClose}) {
   };
   
   const handleKleeblatt = () => {
-    // Sofortiger Sieg (Beendet das Spiel direkt)
     const newHist = [...history, {
       card: currentCard.id, baseScore: 0, bonusScore: 0, score: TARGET, isTutto: true
     }];
     onRecord({
       score: TARGET, baseScore: 0, bonusScore: 0, bust: false,
+      isStop: false, isInitialStop: false, cardsDrawn: newHist.length,
       tuttoCycles: newHist.filter(h=>h.isTutto).length,
       card: newHist[0].card, cards: newHist.map(h=>h.card),
       cardDetails: newHist, instant: true
     }, []);
   };
 
-  // --- RENDERING: Karten ziehen ---
   if(step === 'draw') {
     return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
       <div class="anim" style=${{background:C.surface,width:'100%',padding:'20px',borderTopLeftRadius:24,borderTopRightRadius:24,maxHeight:'90vh',overflowY:'auto'}}>
@@ -609,7 +611,6 @@ function TurnModal({game, roster, onRecord, onClose}) {
     </div>`;
   }
 
-  // --- RENDERING: Zwischenstand nach Tutto ---
   if(step === 'interim') {
     return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
       <div class="anim" style=${{background:C.surface,width:'100%',padding:'24px 20px',borderTopLeftRadius:24,borderTopRightRadius:24}}>
@@ -625,7 +626,6 @@ function TurnModal({game, roster, onRecord, onClose}) {
     </div>`;
   }
 
-  // --- RENDERING: Aktuelle Karte spielen ---
   const isFixed = ['strasse', 'plusminus', 'kleeblatt'].includes(currentCard.id);
   const isFeuerwerk = currentCard.id === 'feuerwerk';
   const isStop = currentCard.id === 'stop';
@@ -687,36 +687,55 @@ function TurnModal({game, roster, onRecord, onClose}) {
 
 // ═══ STATS & MORE ════════════════════════════════════════════════════════════
 
-function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack}) {
+function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack, onDeleteGame}) {
+  const [selProgGame, setSelProgGame] = useState('');
   const finished = games.filter(g=>g.finished);
   
   const pStats = roster.map(name => {
     const pg = finished.filter(g=>g.players.some(p=>p.name===name));
     const wins = pg.filter(g=>(g.winner||'').includes(name)).length;
     const allTurns = pg.flatMap(g=>g.players.find(p=>p.name===name)?.turns||[]);
+    
+    const totalStopCards = allTurns.filter(t => t.isStop).length;
+    const totalCards = allTurns.reduce((s, t) => s + (t.cardsDrawn || 0), 0);
+    const stopChance = totalCards > 0 ? Math.round((totalStopCards / totalCards) * 100) : 0;
+
+    const validTurns = allTurns.filter(t => !t.isInitialStop);
     const finalScores = pg.map(g=>total(g.players.find(p=>p.name===name)));
-    const bustTs = allTurns.filter(t=>t.bust);
-    const tuttoTs = allTurns.filter(t=>t.tuttoCycles>0);
-    const multiTuttoTs = allTurns.filter(t=>t.tuttoCycles>1);
-    const scoringTs = allTurns.filter(t=>!t.bust && !t.isDeduction && t.score>0);
+    const bustTs = validTurns.filter(t=>t.bust);
+    const tuttoTs = validTurns.filter(t=>t.tuttoCycles>0);
+    const multiTuttoTs = validTurns.filter(t=>t.tuttoCycles>1);
+    const scoringTs = validTurns.filter(t=>!t.bust && !t.isDeduction && t.score>0);
 
     return {
       name, n: pg.length, wins, winRate: pg.length ? Math.round(wins/pg.length*100) : 0,
       avgFinal: avg(finalScores),
       bestFinal:finalScores.length ? Math.max(...finalScores) : 0,
       worstFinal:finalScores.length ? Math.min(...finalScores) : 0,
-      totalTurns: allTurns.length,
-      bustRate: allTurns.length ? Math.round(bustTs.length/allTurns.length*100) : 0,
-      tuttoRate: allTurns.length ? Math.round(tuttoTs.length/allTurns.length*100) : 0,
-      multiTuttoRate: allTurns.length ? Math.round(multiTuttoTs.length/allTurns.length*100) : 0,
-      avgPerTurn: allTurns.length ? Math.round(allTurns.reduce((s,t)=>s+t.score,0)/allTurns.length) : 0,
+      
+      totalTurns: validTurns.length,
+      stopCards: totalStopCards,
+      totalCards: totalCards,
+      stopChance: stopChance,
+      
+      bustRate: validTurns.length ? Math.round(bustTs.length/validTurns.length*100) : 0,
+      tuttoRate: validTurns.length ? Math.round(tuttoTs.length/validTurns.length*100) : 0,
+      multiTuttoRate: validTurns.length ? Math.round(multiTuttoTs.length/validTurns.length*100) : 0,
+      avgPerTurn: validTurns.length ? Math.round(validTurns.reduce((s,t)=>s+t.score,0)/validTurns.length) : 0,
       avgPerScore: scoringTs.length ? Math.round(scoringTs.reduce((s,t)=>s+t.score,0)/scoringTs.length): 0,
       bestTurn: scoringTs.length ? Math.max(...scoringTs.map(t=>t.score)) : 0,
       finalScores, allTurns,
     };
   }).filter(p=>p.n>0);
 
-  const TABS=[{id:'leaderboard',l:'Rangliste'},{id:'player',l:'Spieler'},{id:'compare',l:'Vergleich'},{id:'turns',l:'Züge'},{id:'history',l:'Historie'}];
+  const TABS=[
+    {id:'leaderboard',l:'Rangliste'},
+    {id:'player',l:'Spieler'},
+    {id:'compare',l:'Vergleich'},
+    {id:'progress',l:'Spielverlauf'},
+    {id:'turns',l:'Züge'},
+    {id:'history',l:'Historie'}
+  ];
 
   return html`<div style=${{maxWidth:460,margin:'0 auto',padding:'20px 16px 40px',display:'flex',flexDirection:'column',height:'100vh'}}>
     <div style=${{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
@@ -774,11 +793,17 @@ function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack
               <${RateBar} label="TUTTO-Rate" val=${selSt.tuttoRate} color=${C.green}/>
               <${RateBar} label="Nieten-Rate" val=${selSt.bustRate} color=${C.red}/>
               <${RateBar} label="Risiko (Mehrfach-Tutto)" val=${selSt.multiTuttoRate} color=${C.amber}/>
-              <div style=${{marginTop:10,fontSize:11,color:C.muted,lineHeight:1.5}}>
-                ${selSt.multiTuttoRate > 20 ? `${selSt.name} wagt es oft, nach dem ersten TUTTO weiterzuspielen — hohes Risiko!` :
-                  selSt.tuttoRate > selSt.bustRate ? `Mehr TUTTOs als Nieten — ${selSt.name} spielt mutig, aber kontrolliert.` :
-                  selSt.bustRate > 20 ? `Hohe Niete-Rate — ${selSt.name} geht oft zu weit.` :
-                  `Konservative Spielweise — ${selSt.name} nimmt lieber sichere Punkte mit.`}
+            </div>
+
+            <div style=${{background:C.surface,borderRadius:16,padding:14,marginBottom:16}}>
+              <div style=${{fontSize:13,fontWeight:700,marginBottom:12}}>Stopkarten-Statistik</div>
+              <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+                <${StatCard} label="Karten gesamt" val=${selSt.totalCards} />
+                <${StatCard} label="Davon Stops" val=${selSt.stopCards} color=${C.red} />
+                <${StatCard} label="Zieh-Chance" val="${selSt.stopChance}%" color=${C.amber} />
+              </div>
+              <div style=${{marginTop:12, fontSize:11, color:C.muted2, lineHeight:1.5}}>
+                Info: Züge, in denen beim allerersten Wurf eine Stopkarte aufgedeckt wurde, fließen NICHT in die Risiko-Statistik (Tutto-Rate etc.) mit ein.
               </div>
             </div>
 
@@ -818,7 +843,7 @@ function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack
             {l:'Ø Punkte Ende', v1:fmtN(p1.avgFinal), v2:fmtN(p2.avgFinal), n1:p1.avgFinal, n2:p2.avgFinal},
             {l:'TUTTO-Rate',    v1:`${p1.tuttoRate}%`, v2:`${p2.tuttoRate}%`, n1:p1.tuttoRate, n2:p2.tuttoRate},
             {l:'Nieten-Rate',   v1:`${p1.bustRate}%`, v2:`${p2.bustRate}%`, n1:p2.bustRate, n2:p1.bustRate, inv:true},
-            {l:'Bester Zug',    v1:fmtN(p1.bestTurn), v2:fmtN(p2.bestTurn), n1:p1.bestTurn, n2:p2.bestTurn},
+            {l:'Stop-Pech',     v1:`${p1.stopChance}%`, v2:`${p2.stopChance}%`, n1:p2.stopChance, n2:p1.stopChance, inv:true},
           ];
           return html`<div style=${{background:C.surface,borderRadius:16,padding:'8px 16px'}}>
             ${comps.map((c,i)=>html`<div key=${i} style=${{display:'flex',justifyContent:'space-between',alignItems:'center',
@@ -831,11 +856,51 @@ function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack
         })() : html`<div style=${{textAlign:'center',color:C.muted,marginTop:20,fontSize:13}}>Wähle zwei verschiedene Spieler aus.</div>`}
       </div>`}
 
+      ${tab==='progress' && finished.length>0 && (()=>{
+        const g = finished.find(x => x.id === (selProgGame || finished[finished.length-1].id));
+        if (!g) return null;
+        
+        const maxRounds = Math.max(...g.players.map(p=>p.turns.length));
+        const chartData = Array.from({length: maxRounds + 1}, (_, i) => {
+          const pt = { round: i };
+          g.players.forEach(p => {
+            pt[p.name] = p.turns.slice(0, i).reduce((s,t)=>s+t.score, 0);
+          });
+          return pt;
+        });
+
+        return html`<div class="anim">
+          <select value=${g.id} onChange=${e=>setSelProgGame(e.target.value)} style=${{
+            width:'100%',padding:'12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:12,
+            color:C.text,fontSize:14,marginBottom:16,outline:'none'}}>
+            ${[...finished].reverse().map((fg, i) => html`<option key=${fg.id} value=${fg.id}>${fg.date} - Sieger: ${fg.winner}</option>`)}
+          </select>
+          
+          <div style=${{background:C.surface, borderRadius:16, padding:'16px 16px 16px 0'}}>
+            <div style=${{paddingLeft:16, fontSize:13, fontWeight:700, marginBottom:16}}>Punkteverlauf pro Runde</div>
+            <div style=${{height: 300}}>
+              <${ResponsiveContainer} width="100%" height="100%">
+                <${LineChart} data=${chartData}>
+                  <${CartesianGrid} strokeDasharray="3 3" stroke=${C.border} vertical=${false}/>
+                  <${XAxis} dataKey="round" stroke=${C.muted} tick=${{fill:C.muted, fontSize:10}} tickLine=${false} axisLine=${false}/>
+                  <${YAxis} stroke=${C.muted} tick=${{fill:C.muted, fontSize:10}} tickLine=${false} axisLine=${false} width=${45}/>
+                  <${Tooltip} contentStyle=${{background:C.surface2, border:'none', borderRadius:8, color:C.text}} itemStyle=${{fontSize:13, fontWeight:700}}/>
+                  <${Legend} wrapperStyle=${{fontSize:11, paddingTop:10}} iconType="circle"/>
+                  ${g.players.map((p, i) => html`
+                    <${Line} key=${p.name} type="monotone" dataKey=${p.name} stroke=${PCL[roster.indexOf(p.name)%PC.length]} strokeWidth=${3} dot=${false} activeDot=${{r:6}} />
+                  `)}
+                </${LineChart}>
+              </${ResponsiveContainer}>
+            </div>
+          </div>
+        </div>`;
+      })()}
+
       ${tab==='turns' && finished.length>0 && html`<div class="anim">
         <div style=${{background:C.surface,borderRadius:16,padding:'12px 16px'}}>
           <div style=${{fontSize:11,color:C.muted2,letterSpacing:2,textTransform:'uppercase',marginBottom:12,fontWeight:700}}>Top 10 Züge</div>
           ${(()=>{
-            const all = finished.flatMap(g=>g.players.flatMap(p=>p.turns.map(t=>({...t,name:p.name,date:g.date}))));
+            const all = finished.flatMap(g=>g.players.flatMap(p=>p.turns.map(t=>({...t,name:p.name,date:g.date})))).filter(t => t.score > 0);
             all.sort((a,b)=>b.score-a.score);
             return all.slice(0,10).map((t,i)=>{
               const ci=roster.indexOf(t.name);
@@ -863,9 +928,12 @@ function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack
           const tots = g.players.map(p=>total(p));
           const maxT = Math.max(...tots);
           return html`<div key=${g.id} style=${{background:C.surface,borderRadius:16,padding:'12px 16px',marginBottom:10}}>
-            <div style=${{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-              <span style=${{fontSize:12,color:C.muted}}>${g.date}</span>
-              ${g.winner && html`<span style=${{fontSize:12,color:C.amber,fontWeight:700}}>🏆 ${g.winner}</span>`}
+            <div style=${{display:'flex',justifyContent:'space-between',marginBottom:8,alignItems:'flex-start'}}>
+              <div>
+                <span style=${{fontSize:12,color:C.muted}}>${g.date}</span>
+                ${g.winner && html`<span style=${{fontSize:12,color:C.amber,fontWeight:700,marginLeft:8}}>🏆 ${g.winner}</span>`}
+              </div>
+              <button onClick=${()=>onDeleteGame(g.id)} style=${{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,padding:0,lineHeight:1}} title="Spiel löschen">🗑️</button>
             </div>
             ${g.players.map((p,i)=>html`<div key=${p.name} style=${{display:'flex',justifyContent:'space-between',padding:'4px 0',
               borderBottom:i<g.players.length-1?`1px solid ${C.border}`:'none'}}>
