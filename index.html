@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Tutto V2</title>
+  <title>Tutto</title>
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -21,7 +21,6 @@
     select { -webkit-appearance: none; appearance: none; }
     @keyframes slideUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
     .anim { animation: slideUp 0.22s ease; }
-    button { font-family: inherit; }
   </style>
 </head>
 <body>
@@ -30,17 +29,20 @@
 import { createElement as h, useState, useEffect } from 'https://esm.sh/react@18';
 import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import htm from 'https://esm.sh/htm@3';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'https://esm.sh/recharts@2?deps=react@18,react-dom@18';
 const html = htm.bind(h);
 
 // ═══ CONSTANTS ═══════════════════════════════════════════════════════════════
+
 const TARGET = 6000;
+
 const CARDS = [
-  { id:'bonus200',  label:'Bonus 200',  emoji:'🎁', color:'#b45309', bonus: 200 },
-  { id:'bonus300',  label:'Bonus 300',  emoji:'🎁', color:'#b45309', bonus: 300 },
-  { id:'bonus400',  label:'Bonus 400',  emoji:'🎁', color:'#a16207', bonus: 400 },
-  { id:'bonus500',  label:'Bonus 500',  emoji:'🎁', color:'#92400e', bonus: 500 },
-  { id:'bonus600',  label:'Bonus 600',  emoji:'🎁', color:'#92400e', bonus: 600 },
-  { id:'x2',        label:'×2',         emoji:'✖',  color:'#7c3aed', mult: 2 },
+  { id:'bonus200',  label:'Bonus 200',  emoji:'🎁', color:'#b45309' },
+  { id:'bonus300',  label:'Bonus 300',  emoji:'🎁', color:'#b45309' },
+  { id:'bonus400',  label:'Bonus 400',  emoji:'🎁', color:'#a16207' },
+  { id:'bonus500',  label:'Bonus 500',  emoji:'🎁', color:'#92400e' },
+  { id:'bonus600',  label:'Bonus 600',  emoji:'🎁', color:'#92400e' },
+  { id:'x2',        label:'×2',         emoji:'✖',  color:'#7c3aed' },
   { id:'stop',      label:'Stop',       emoji:'🛑', color:'#6b7280' },
   { id:'feuerwerk', label:'Feuerwerk',  emoji:'🎆', color:'#dc2626' },
   { id:'plusminus', label:'Plus/Minus', emoji:'⊕',  color:'#0284c7' },
@@ -54,214 +56,777 @@ const C = {
   amber:'#f59e0b', amberL:'#fde68a',
   red:'#ef4444', green:'#22c55e',
 };
-const PC = ['#f59e0b','#ef4444','#10b981','#818cf8','#f97316','#e879f9','#38bdf8'];
+const PC  = ['#f59e0b','#ef4444','#10b981','#818cf8','#f97316','#e879f9','#38bdf8'];
+const PCL = ['#fde68a','#fca5a5','#6ee7b7','#c7d2fe','#fed7aa','#f5d0fe','#bae6fd'];
 
 // ═══ HELPERS ═════════════════════════════════════════════════════════════════
-const total = p => p.turns.reduce((s,t) => s + (t.score || 0), 0);
-const ls = (k,d) => { try{const v=localStorage.getItem(k); return v?JSON.parse(v):d;}catch{return d;} };
-const lsSet = (k,v) => { try{localStorage.setItem(k,JSON.stringify(v));}catch{} };
-const lsDel = k => { try{localStorage.removeItem(k);}catch{} };
+
+const total  = p   => p.turns.reduce((s,t) => s+t.score, 0);
+const ls     = (k,d) => { try{const v=localStorage.getItem(k); return v?JSON.parse(v):d;}catch{return d;} };
+const lsSet  = (k,v) => { try{localStorage.setItem(k,JSON.stringify(v));}catch{} };
+const lsDel  = k     => { try{localStorage.removeItem(k);}catch{} };
+const pColor = (name,roster,light=false) => { const i=roster.indexOf(name); return (light?PCL:PC)[i%PC.length]; };
+const avg    = arr   => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : 0;
+const fmtN   = n     => n.toLocaleString('de-DE');
+
+const isOver = game => {
+  if (!game?.players?.length) return false;
+  if (game.players.some(p=>p.turns.some(t=>t.instant))) return true;
+  const tots  = game.players.map(total);
+  const turns = game.players.map(p=>p.turns.length);
+  return tots.some(t=>t>=TARGET) && turns.every(t=>t===turns[0]) && turns[0]>0;
+};
+
+const getWinner = game => {
+  const instant = game.players.find(p=>p.turns.some(t=>t.instant));
+  if (instant) return instant.name;
+  const tots = game.players.map(p=>({name:p.name,t:total(p)}));
+  const max  = Math.max(...tots.map(t=>t.t));
+  const w    = tots.filter(t=>t.t===max);
+  return w.length===1 ? w[0].name : w.map(p=>p.name).join(' & ');
+};
+
+// ═══ GITHUB SYNC ═════════════════════════════════════════════════════════════
+
+const GH_FILE = 'tuttodata.json';
+const ghH = t => ({ Authorization:`token ${t}`, Accept:'application/vnd.github.v3+json' });
+async function ghRead(cfg) {
+  const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${GH_FILE}`,{headers:ghH(cfg.token)});
+  if (r.status===404) return {data:null,sha:null};
+  if (!r.ok) throw new Error(`GitHub ${r.status}`);
+  const j = await r.json();
+  return {data:JSON.parse(atob(j.content.replace(/\n/g,''))),sha:j.sha};
+}
+async function ghWrite(cfg,data,sha) {
+  const body={message:'Tutto update',content:btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2))))};
+  if (sha) body.sha=sha;
+  const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${GH_FILE}`,
+    {method:'PUT',headers:{...ghH(cfg.token),'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if (!r.ok) throw new Error(`GitHub ${r.status}`);
+  return (await r.json()).content.sha;
+}
+function mergeData(local,remote) {
+  const games=[...(remote.games||[])];
+  const ids=new Set(games.map(g=>g.id));
+  for(const g of (local.games||[])) if(!ids.has(g.id)){games.push(g);ids.add(g.id);}
+  const roster=[...new Set([...(remote.roster||[]),...(local.roster||[])])];
+  return {games:games.sort((a,b)=>a.id.localeCompare(b.id)),roster};
+}
+
+// ═══ SHARED COMPONENTS ═══════════════════════════════════════════════════════
+
+function Btn({onClick,bg,border,children,disabled,dark}) {
+  return html`<button onClick=${onClick} disabled=${disabled} style=${{
+    width:'100%',padding:'13px 16px',borderRadius:14,border:border?`1px solid ${border}`:'none',
+    background:disabled?C.muted2:bg,color:dark?'#000':'white',fontSize:15,fontWeight:700,
+    cursor:disabled?'not-allowed':'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+    opacity:disabled?0.5:1,transition:'opacity 0.15s'}}>${children}</button>`;
+}
+
+function StatCard({label,val,color,sub}) {
+  return html`<div style=${{background:C.surface2,borderRadius:10,padding:'8px 10px',textAlign:'center'}}>
+    <div style=${{fontSize:10,color:C.muted,marginBottom:3}}>${label}</div>
+    <div style=${{fontSize:16,fontWeight:700,color:color||C.text}}>${val}</div>
+    ${sub&&html`<div style=${{fontSize:9,color:C.muted2,marginTop:1}}>${sub}</div>`}
+  </div>`;
+}
+
+function RateBar({label,val,color}) {
+  return html`<div style=${{marginBottom:9}}>
+    <div style=${{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+      <span style=${{fontSize:12}}>${label}</span>
+      <span style=${{fontSize:12,fontWeight:700,color}}>${val}%</span>
+    </div>
+    <div style=${{height:5,background:C.surface2,borderRadius:3,overflow:'hidden'}}>
+      <div style=${{height:5,borderRadius:3,background:color,width:`${val}%`,transition:'width 0.4s'}}/>
+    </div>
+  </div>`;
+}
 
 // ═══ APP ═════════════════════════════════════════════════════════════════════
+
 function App() {
   const [screen, setScreen] = useState('home');
-  const [cur, setCur] = useState(() => ls('tt:current', null));
-  const [players, setPlayers] = useState([]);
+  const [games,  setGames]  = useState(()=>ls('tt:games',[]));
+  const [cur,    setCur]    = useState(()=>ls('tt:current',null));
+  const [roster, setRoster] = useState(()=>ls('tt:roster',[]));
+  const [modal,  setModal]  = useState(false);
+  const [stab,   setStab]   = useState('leaderboard');
+  const [sPl,    setSPl]    = useState(null);
+  const [sCmp,   setSCmp]   = useState([null,null]);
+  const [ghCfg,  setGhCfg]  = useState(()=>ls('tt:gh',null));
+  const [syncSt, setSyncSt] = useState('idle');
+  const [syncMsg,setSyncMsg]= useState('');
 
-  useEffect(() => {
-    lsSet('tt:current', cur);
-  }, [cur]);
+  useEffect(()=>{
+    if (roster.length===0) setScreen('setup');
+    else if (ghCfg?.token) doSync();
+  },[]);
 
-  const startGame = (selectedPlayers) => {
-    setCur({
-      id: Date.now().toString(),
-      players: selectedPlayers.map(name => ({ name, turns: [] })),
-      currentPlayerIdx: 0
-    });
+  const doSync = async cfg => {
+    const c=cfg||ghCfg; if(!c?.token) return;
+    setSyncSt('syncing');
+    try {
+      const {data,sha}=await ghRead(c);
+      if (data) {
+        const m=mergeData({games:ls('tt:games',[]),roster:ls('tt:roster',[])},data);
+        setGames(m.games); lsSet('tt:games',m.games);
+        setRoster(m.roster); lsSet('tt:roster',m.roster);
+        lsSet('tt:gh_sha',sha);
+      }
+      setSyncSt('ok'); setSyncMsg(new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}));
+    } catch(e){setSyncSt('error');setSyncMsg(e.message);}
+  };
+
+  const pushGh = async(g,r) => {
+    const c=ghCfg; if(!c?.token) return;
+    setSyncSt('syncing');
+    try {
+      const {sha}=await ghRead(c);
+      const ns=await ghWrite(c,{version:1,roster:r,games:g},sha);
+      lsSet('tt:gh_sha',ns);
+      setSyncSt('ok'); setSyncMsg(new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}));
+    } catch(e){setSyncSt('error');setSyncMsg(e.message);}
+  };
+
+  const saveGames  = (g,r) => { setGames(g);  lsSet('tt:games',g);  pushGh(g,r||roster); };
+  const saveRoster = r     => { setRoster(r); lsSet('tt:roster',r); };
+  const saveCur    = g     => { setCur(g); g ? lsSet('tt:current',g) : lsDel('tt:current'); };
+
+  const startGame = players => {
+    const nr=[...new Set([...roster,...players])];
+    saveRoster(nr);
+    saveCur({id:Date.now().toString(), date:new Date().toLocaleDateString('de-DE'),
+      players:players.map(name=>({name,turns:[]})), currentPlayerIdx:0});
     setScreen('game');
   };
 
-  if (screen === 'home') {
-    return html`
-      <div style=${{padding:20, textAlign:'center'}}>
-        <h1 style=${{color:C.amber, marginBottom:30, marginTop:40}}>Tutto V2</h1>
-        ${cur ? html`
-          <button onClick=${() => setScreen('game')} style=${{background:C.amber, color:'#000', padding:'15px', borderRadius:10, width:'100%', fontSize:18, fontWeight:'bold', border:'none', marginBottom:20}}>
-            Aktuelles Spiel fortsetzen
-          </button>
-        ` : null}
-        <button onClick=${() => { setPlayers(['Spieler 1', 'Spieler 2']); setScreen('setup'); }} style=${{background:C.surface2, color:C.text, padding:'15px', borderRadius:10, width:'100%', fontSize:18, border:`1px solid ${C.border}`}}>
-          Neues Spiel starten
-        </button>
-      </div>
-    `;
-  }
+  const recordTurn = (turnData, deductNames=[]) => {
+    if (!cur) return;
+    let np = cur.players.map((p,i) =>
+      i===cur.currentPlayerIdx ? {...p, turns:[...p.turns, turnData]} : p
+    );
+    for (const name of deductNames) {
+      const pTot = np.find(p=>p.name===name)?.turns.reduce((s,t)=>s+t.score, 0) ?? 0;
+      const actual = Math.min(1000, Math.max(0, pTot));
+      if (actual > 0) {
+        np = np.map(p => p.name===name
+          ? {...p, turns:[...p.turns, {score:-actual, bust:false, tuttoCycles:0, card:'plusminus_abzug', isDeduction:true}]}
+          : p);
+      }
+    }
+    saveCur({...cur, players:np, currentPlayerIdx:(cur.currentPlayerIdx+1)%cur.players.length});
+    setModal(false);
+  };
 
-  if (screen === 'setup') {
-    return html`
-      <div style=${{padding:20}}>
-        <h2 style=${{color:C.amber, marginBottom:20}}>Neues Spiel</h2>
-        <button onClick=${() => startGame(players)} style=${{background:C.green, color:'#fff', padding:'15px', borderRadius:10, width:'100%', fontSize:18, border:'none'}}>
-          Starten
-        </button>
-      </div>
-    `;
-  }
-
-  // --- GAME SCREEN ---
-  const activePlayer = cur.players[cur.currentPlayerIdx];
-  const nextPlayerIdx = (cur.currentPlayerIdx + 1) % cur.players.length;
-
-  const handleTurn = (turnData) => {
-    const newPlayers = [...cur.players];
-    newPlayers[cur.currentPlayerIdx].turns.push(turnData);
-    setCur({ ...cur, players: newPlayers, currentPlayerIdx: nextPlayerIdx });
+  const finishGame = () => {
+    if (!cur) return;
+    const winner = getWinner(cur);
+    saveGames([...games,{...cur,winner,finished:true}], roster);
+    saveCur(null);
+    setScreen('home');
   };
 
   const undoLastTurn = () => {
+    if (!cur || !confirm('Letzten Zug wirklich rückgängig machen?')) return;
+    const np = [...cur.players];
     const prevIdx = (cur.currentPlayerIdx - 1 + cur.players.length) % cur.players.length;
-    const newPlayers = [...cur.players];
-    if (newPlayers[prevIdx].turns.length > 0) {
-      newPlayers[prevIdx].turns.pop();
-      setCur({ ...cur, players: newPlayers, currentPlayerIdx: prevIdx });
+    if(np[prevIdx].turns.length > 0) {
+      np[prevIdx].turns.pop();
+      saveCur({...cur, players:np, currentPlayerIdx:prevIdx});
     }
   };
 
   const abortGame = () => {
     if(confirm('Möchtest du das aktuelle Spiel wirklich abbrechen und löschen?')) {
-      setCur(null);
-      lsDel('tt:current');
+      saveCur(null);
       setScreen('home');
     }
   };
 
-  return html`
-    <div style=${{padding:20, display:'flex', flexDirection:'column', height:'100%'}}>
-      <div style=${{display:'flex', justifyContent:'space-between', marginBottom:20}}>
-        <button onClick=${() => setScreen('home')} style=${{background:'none', color:C.muted, border:'none', fontSize:14}}>Zurück</button>
-        <div style=${{color:C.amber, fontWeight:'bold'}}>Ziel: 6000</div>
-      </div>
+  const syncBadge = html`<span style=${{fontSize:11,color:syncSt==='ok'?C.green:syncSt==='error'?C.red:C.muted}}>
+    ${syncSt==='syncing'?'↻ Sync…':syncSt==='ok'?`☁ ${syncMsg}`:syncSt==='error'?'⚠ Sync-Fehler':''}
+  </span>`;
 
-      <div style=${{display:'flex', gap:10, overflowX:'auto', paddingBottom:10}}>
-        ${cur.players.map((p, i) => html`
-          <div key=${p.name} style=${{background: i === cur.currentPlayerIdx ? C.surface2 : 'transparent', border: i === cur.currentPlayerIdx ? `2px solid ${C.amber}` : `1px solid ${C.border}`, padding:'10px 15px', borderRadius:10, textAlign:'center', minWidth:100}}>
-            <div style=${{fontSize:14, color: i === cur.currentPlayerIdx ? C.amber : C.text}}>${p.name}</div>
-            <div style=${{fontSize:20, fontWeight:'bold'}}>${total(p)}</div>
-          </div>
-        `)}
-      </div>
-
-      <div style=${{flex:1, marginTop:20}}>
-        <h3 style=${{marginBottom:15}}>Zug von ${activePlayer.name}</h3>
-        <TurnManager onFinish=${handleTurn} />
-      </div>
-
-      <div style=${{marginTop:'auto', paddingTop:20, borderTop:`1px solid ${C.border}`, display:'flex', gap:10}}>
-        <button onClick=${undoLastTurn} style=${{flex:1, background:C.surface2, color:C.text, border:`1px solid ${C.border}`, padding:12, borderRadius:8}}>↩ Letzten Zug löschen</button>
-        <button onClick=${abortGame} style=${{flex:1, background:C.red, color:'#fff', border:'none', padding:12, borderRadius:8}}>✖ Spiel abbrechen</button>
-      </div>
-    </div>
-  `;
+  return html`<div style=${{minHeight:'100vh',background:C.bg,color:C.text}}>
+    ${screen==='home'  && html`<${Home}      ...${{games,roster,cur,syncBadge,onNew:()=>setScreen('setup'),onContinue:()=>setScreen('game'),onStats:()=>setScreen('stats'),onGh:()=>setScreen('gh')}}/>`}
+    ${screen==='setup' && html`<${GameSetup} roster=${roster} onStart=${startGame} onBack=${()=>setScreen('home')}/>`}
+    ${screen==='game' && cur && html`
+      <${Game} ...${{game:cur,roster,onTurn:()=>setModal(true),onFinish:finishGame,onUndo:undoLastTurn,onAbort:abortGame,onBack:()=>setScreen('home')}}/>
+      ${modal && html`<${TurnModal} ...${{game:cur,roster,onRecord:recordTurn,onClose:()=>setModal(false)}}/>`}
+    `}
+    ${screen==='stats' && html`<${Stats} ...${{games,roster,tab:stab,setTab:setStab,selPlayer:sPl,setSelPlayer:setSPl,cmp:sCmp,setCmp:setSCmp,onBack:()=>setScreen('home')}}/>`}
+    ${screen==='gh'    && html`<${GhSettings} initial=${ghCfg} onSave=${cfg=>{setGhCfg(cfg);lsSet('tt:gh',cfg);if(cfg)doSync(cfg);setScreen('home');}} onBack=${()=>setScreen('home')}/>`}
+  </div>`;
 }
 
-function TurnManager({ onFinish }) {
-  const [drawnCards, setDrawnCards] = useState([]);
-  const [baseScoreStr, setBaseScoreStr] = useState('');
-  const [bust, setBust] = useState(false);
+// ═══ HOME ════════════════════════════════════════════════════════════════════
 
-  const drawCard = (cardId) => {
-    setDrawnCards([...drawnCards, CARDS.find(c => c.id === cardId)]);
+function Home({games,roster,cur,syncBadge,onNew,onContinue,onStats,onGh}) {
+  const recent=[...games].reverse().slice(0,5);
+  return html`<div style=${{maxWidth:460,margin:'0 auto',padding:'0 16px 48px'}}>
+    <div style=${{textAlign:'center',padding:'44px 0 26px'}}>
+      <div style=${{fontSize:52,fontWeight:900,letterSpacing:-2,fontStyle:'italic',
+        background:`linear-gradient(135deg,${C.amber},#fbbf24,#f97316)`,WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>
+        TUTTO
+      </div>
+      <div style=${{fontSize:12,color:C.muted,marginTop:2,letterSpacing:2,textTransform:'uppercase'}}>Digitaler Spielblock</div>
+      <div style=${{marginTop:6}}>${syncBadge}</div>
+    </div>
+
+    <div style=${{display:'flex',flexDirection:'column',gap:10}}>
+      ${cur && html`<${Btn} onClick=${onContinue} bg=${C.amber} dark=${true}>▶ Spiel fortsetzen</${Btn}>`}
+      <${Btn} onClick=${onNew}   bg=${C.surface2} border=${C.border}>+ Neues Spiel</${Btn}>
+      <${Btn} onClick=${onStats} bg=${C.surface2} border=${C.border}>
+        📊 Statistiken <span style=${{fontSize:12,color:C.muted,marginLeft:4}}>${games.length} Spiele</span>
+      </${Btn}>
+    </div>
+
+    <div style=${{display:'flex',justifyContent:'center',marginTop:12}}>
+      <button onClick=${onGh} style=${{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:13}}>☁ GitHub Sync</button>
+    </div>
+
+    ${recent.length>0 && html`<div style=${{marginTop:28}}>
+      <div style=${{fontSize:11,color:C.muted2,letterSpacing:2,textTransform:'uppercase',marginBottom:10,fontWeight:700}}>Letzte Spiele</div>
+      ${recent.map(g=>{
+        const tots=g.players.map(p=>total(p));
+        const maxT=Math.max(...tots);
+        const rounds=Math.max(...g.players.map(p=>p.turns.length),0);
+        return html`<div key=${g.id} style=${{padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+          <div style=${{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+            <span style=${{color:C.muted,fontSize:12}}>${g.date}</span>
+            <span style=${{color:C.muted2,fontSize:11}}>${g.players.length} Spieler · ${rounds} Runden</span>
+          </div>
+          <div style=${{display:'flex',flexWrap:'wrap',gap:8}}>
+            ${g.players.map((p,i)=>html`<span key=${i} style=${{fontSize:13,color:tots[i]===maxT?PCL[i%PC.length]:C.muted}}>
+              ${p.name}: <strong>${fmtN(tots[i])}</strong>
+            </span>`)}
+          </div>
+          ${g.winner && html`<div style=${{fontSize:11,color:C.amber,marginTop:3}}>🏆 ${g.winner}</div>`}
+        </div>`;
+      })}
+    </div>`}
+
+    <div style=${{marginTop:24,padding:'12px',background:C.surface,borderRadius:12,fontSize:11,color:C.muted,lineHeight:1.7}}>
+      <strong style=${{color:C.text}}>Punkte:</strong> ⚄=50 · ⚀=100 · Drillinge: 2×200, 3×300, 4×400, 5×500, 6×600, 1×1000 · Straße=2000 · Ziel: 6.000
+    </div>
+  </div>`;
+}
+
+// ═══ GAME SETUP ══════════════════════════════════════════════════════════════
+
+function GameSetup({roster,onStart,onBack}) {
+  const [selected,setSelected] = useState([]);
+  const [newName, setNewName]  = useState('');
+
+  const toggle = name => {
+    if (selected.includes(name)) setSelected(selected.filter(n=>n!==name));
+    else if (selected.length<8) setSelected([...selected,name]);
+  };
+  const addNew = () => {
+    const n=newName.trim(); if(!n||selected.length>=8) return;
+    if (!selected.includes(n)) setSelected([...selected,n]);
+    setNewName('');
   };
 
-  const finishTurn = (isTutto) => {
-    if (bust) {
-      onFinish({ cards: drawnCards.map(c=>c.id), score: 0, baseScore: 0, bonusScore: 0, bust: true, tuttoCycles: isTutto ? drawnCards.length : 0 });
+  return html`<div style=${{maxWidth:460,margin:'0 auto',padding:'20px 16px 40px'}}>
+    <div style=${{display:'flex',alignItems:'center',gap:12,marginBottom:24}}>
+      ${roster.length>0 && html`<button onClick=${onBack} style=${{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:20,padding:0}}>‹</button>`}
+      <span style=${{fontSize:22,fontWeight:800}}>Neues Spiel</span>
+    </div>
+
+    ${selected.length>0 && html`<div style=${{marginBottom:20}}>
+      <div style=${{fontSize:11,color:C.muted2,letterSpacing:2,textTransform:'uppercase',marginBottom:8,fontWeight:700}}>Ausgewählt (${selected.length}/8)</div>
+      <div style=${{display:'flex',flexWrap:'wrap',gap:8}}>
+        ${selected.map((n,i)=>html`<div key=${n} style=${{display:'flex',alignItems:'center',gap:6,background:C.surface2,
+          border:`2px solid ${PC[i%PC.length]}`,borderRadius:20,padding:'6px 12px'}}>
+          <span style=${{color:PC[i%PC.length],fontWeight:700,fontSize:12}}>${i+1}</span>
+          <span style=${{fontSize:13}}>${n}</span>
+          <button onClick=${()=>toggle(n)} style=${{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:14,padding:'0 0 0 4px'}}>×</button>
+        </div>`)}
+      </div>
+    </div>`}
+
+    ${roster.length>0 && html`<div style=${{marginBottom:20}}>
+      <div style=${{fontSize:11,color:C.muted2,letterSpacing:2,textTransform:'uppercase',marginBottom:8,fontWeight:700}}>Bekannte Spieler</div>
+      <div style=${{display:'flex',flexWrap:'wrap',gap:8}}>
+        ${roster.map(n=>{
+          const idx=selected.indexOf(n);
+          const sel=idx>=0;
+          return html`<button key=${n} onClick=${()=>toggle(n)} style=${{
+            background:sel?C.surface2:C.surface,border:`2px solid ${sel?PC[idx%PC.length]:C.border}`,
+            borderRadius:20,padding:'7px 14px',color:sel?PC[idx%PC.length]:C.muted,cursor:'pointer',
+            fontSize:13,fontWeight:sel?700:400}}>${n}</button>`;
+        })}
+      </div>
+    </div>`}
+
+    <div style=${{marginBottom:24}}>
+      <div style=${{fontSize:11,color:C.muted2,letterSpacing:2,textTransform:'uppercase',marginBottom:8,fontWeight:700}}>Neuer Spieler</div>
+      <div style=${{display:'flex',gap:8}}>
+        <input value=${newName} onChange=${e=>setNewName(e.target.value)} onKeyDown=${e=>e.key==='Enter'&&addNew()}
+          placeholder="Name eingeben…" maxLength="15"
+          style=${{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:'11px 14px',
+            color:C.text,fontSize:14,outline:'none'}}/>
+        <button onClick=${addNew} disabled=${!newName.trim()||selected.length>=8} style=${{
+          background:C.surface2,border:`1px solid ${C.border}`,borderRadius:12,padding:'0 16px',color:C.text,
+          fontWeight:700,cursor:'pointer',opacity:(!newName.trim()||selected.length>=8)?0.4:1}}>+</button>
+      </div>
+    </div>
+
+    <${Btn} onClick=${()=>onStart(selected)} disabled=${selected.length<2} bg=${C.green} dark=${true}>
+      Spiel starten
+    </${Btn}>
+  </div>`;
+}
+
+// ═══ GAME UI ═════════════════════════════════════════════════════════════════
+
+function Game({game, roster, onTurn, onFinish, onUndo, onAbort, onBack}) {
+  const over = isOver(game);
+  const cp   = game.players[game.currentPlayerIdx];
+  const maxT = Math.max(...game.players.map(total));
+  const diff = maxT - total(cp);
+
+  const flatTurns = game.players.flatMap(p=>p.turns.map(t=>({...t, name:p.name})));
+  // Für die History weben wir die Züge in chronologischer Reihenfolge zusammen (Runde für Runde)
+  const history = [];
+  const maxRounds = Math.max(...game.players.map(p=>p.turns.length));
+  for (let r=maxRounds-1; r>=0; r--) {
+    for (let i=game.players.length-1; i>=0; i--) {
+      if (game.players[i].turns[r]) {
+        history.push({...game.players[i].turns[r], name:game.players[i].name});
+      }
+    }
+  }
+
+  return html`<div style=${{maxWidth:460,margin:'0 auto',display:'flex',flexDirection:'column',height:'100vh'}}>
+    <div style=${{padding:'16px 16px 12px',background:C.bg,borderBottom:`1px solid ${C.border}`,zIndex:10}}>
+      <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <button onClick=${onBack} style=${{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:14}}>‹ Menü</button>
+        <div style=${{color:C.amber,fontWeight:800,fontSize:14,letterSpacing:1}}>${TARGET.toLocaleString('de-DE')} ZIEL</div>
+      </div>
+      
+      <div style=${{display:'flex',gap:8,overflowX:'auto',paddingBottom:8,scrollbarWidth:'none'}}>
+        ${game.players.map((p,i)=>{
+          const active=i===game.currentPlayerIdx;
+          const tot=total(p);
+          const c=PCL[i%PC.length];
+          return html`<div key=${p.name} style=${{
+            flex:'0 0 auto',background:active?`${PC[i%PC.length]}20`:C.surface,
+            border:`1px solid ${active?PC[i%PC.length]:C.border}`,
+            borderRadius:14,padding:'8px 12px',minWidth:90}}>
+            <div style=${{fontSize:11,color:active?c:C.muted,fontWeight:active?700:400,marginBottom:2}}>${p.name}</div>
+            <div style=${{fontSize:18,fontWeight:800,color:active?c:C.text}}>${fmtN(tot)}</div>
+          </div>`;
+        })}
+      </div>
+    </div>
+
+    <div style=${{flex:1,overflowY:'auto',padding:'16px',display:'flex',flexDirection:'column'}}>
+      ${history.length===0 && html`<div style=${{textAlign:'center',color:C.muted,marginTop:40,fontSize:13}}>Noch keine Züge.</div>`}
+      <div style=${{display:'flex',flexDirection:'column',gap:0}}>
+        ${history.map((t,i) => {
+          const ci=roster.indexOf(t.name);
+          const card=CARDS.find(c=>c.id===t.card);
+          return html`<div key=${i} style=${{display:'flex',alignItems:'center',gap:10,
+            padding:'7px 0',borderBottom:`1px solid ${C.border}`}}>
+            <div style=${{fontSize:14,fontWeight:900,color:i===0?C.amberL:C.muted2,minWidth:22}}>${i+1}.</div>
+            <div style=${{flex:1,minWidth:0}}>
+              <span style=${{color:PCL[ci%PC.length],fontSize:13,fontWeight:600}}>${t.name}</span>
+              ${t.tuttoCycles>0 && html`<span style=${{fontSize:9,background:'#052e16',color:'#86efac',borderRadius:4,padding:'2px 5px',marginLeft:6}}>${t.tuttoCycles===1?'TUTTO':`${t.tuttoCycles}× TUTTO`}</span>`}
+            </div>
+            <div style=${{display:'flex',alignItems:'center',gap:6}}>
+              ${t.cards ? t.cards.map((cid, cidx) => {
+                const c = CARDS.find(x => x.id === cid);
+                return c ? html`<span key=${cidx} style=${{fontSize:13}} title=${c.label}>${c.emoji}</span>` : null;
+              }) : (card && html`<span style=${{fontSize:13}} title=${card.label}>${card.emoji}</span>`)}
+              ${t.bust && html`<span style=${{fontSize:9,background:'#7f1d1d',color:'#fca5a5',borderRadius:4,padding:'2px 5px'}}>Niete</span>`}
+              ${t.isDeduction && html`<span style=${{fontSize:9,background:'#1a0030',color:'#c4b5fd',borderRadius:4,padding:'2px 5px'}}>⊕ Abzug</span>`}
+              ${t.instant&& html`<span style=${{fontSize:9,background:'#14532d',color:'#86efac',borderRadius:4,padding:'2px 5px'}}>🍀 Sieg</span>`}
+              <span style=${{fontSize:15,fontWeight:800,color:t.bust?C.red:t.score<0?C.red:t.score>0?C.text:C.muted,minWidth:52,textAlign:'right'}}>
+                ${t.bust?'—':t.score>0?`+${fmtN(t.score)}`:t.score<0?t.score.toLocaleString('de-DE'):'-'}
+              </span>
+            </div>
+          </div>`;
+        })}
+      </div>
+    </div>
+
+    <div style=${{padding:'16px',background:C.bg,borderTop:`1px solid ${C.border}`,zIndex:10}}>
+      ${!over && html`<div style=${{textAlign:'center',marginBottom:12}}>
+        <div style=${{fontSize:12,color:C.muted2,fontWeight:700,letterSpacing:1,textTransform:'uppercase'}}>Aktueller Zug</div>
+        <div style=${{fontSize:20,fontWeight:800,color:PCL[roster.indexOf(cp.name)%PC.length]}}>${cp.name}</div>
+        ${diff>0 && html`<div style=${{fontSize:11,color:C.muted,marginTop:2}}>${fmtN(diff)} Punkte Rückstand</div>`}
+      </div>`}
+      ${isOver(game)
+        ? html`<${Btn} onClick=${onFinish} bg=${C.amber} dark=${true}>Spiel beenden & speichern</${Btn}>`
+        : html`<${Btn} onClick=${onTurn} bg=${C.green} dark=${true}>Zug eintragen</${Btn}>`
+      }
+      <div style=${{display:'flex',gap:10,marginTop:12}}>
+        <${Btn} onClick=${onUndo} bg=${C.surface2} border=${C.border}>↩ Letzter Zug</${Btn}>
+        <${Btn} onClick=${onAbort} bg=${C.surface2} border=${C.red}>✖ Abbrechen</${Btn}>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ═══ TURN MODAL (NEU, MULTI-CARD & MANUELL) ══════════════════════════════════
+
+function TurnModal({game, roster, onRecord, onClose}) {
+  const [cards, setCards] = useState([]);
+  const [base, setBase] = useState('');
+  
+  const selCard = c => setCards([...cards, c]);
+  
+  const finish = (isBust, isTutto) => {
+    if(isBust) {
+      onRecord({score:0, baseScore:0, bonusScore:0, bust:true, tuttoCycles: cards.length-1, card: cards[0].id, cards: cards.map(c=>c.id)});
+      return;
+    }
+    const current = cards[cards.length-1];
+    if (isTutto && current.id === 'kleeblatt') {
+      onRecord({score:TARGET, baseScore:0, bonusScore:0, bust:false, tuttoCycles:2, card: cards[0].id, cards: cards.map(c=>c.id), instant:true});
       return;
     }
 
-    const base = parseInt(baseScoreStr) || 0;
-    let bonus = 0;
-    let mult = 1;
-
-    // Boni nur berechnen, wenn ein TUTTO geschafft wurde (außer Feuerwerk, da behält man Punkte immer)
-    const lastCard = drawnCards[drawnCards.length - 1];
-    const keepBonus = isTutto || lastCard?.id === 'feuerwerk';
-
-    if (keepBonus) {
-      drawnCards.forEach(c => {
-        if (c.bonus) bonus += c.bonus;
-        if (c.mult) mult *= c.mult;
+    const b = parseInt(base)||0;
+    let bonus = 0; let mult = 1;
+    
+    if (isTutto || current.id==='feuerwerk') {
+      cards.forEach(c=>{
+        if(c.id.startsWith('bonus')) bonus += parseInt(c.id.replace('bonus',''));
+        if(c.id==='x2') mult *= 2;
       });
     }
-
-    const totalScore = (base + bonus) * mult;
-    onFinish({ 
-      cards: drawnCards.map(c=>c.id), 
-      score: totalScore, 
-      baseScore: base, 
-      bonusScore: (totalScore - base), 
-      bust: false, 
-      tuttoCycles: isTutto ? drawnCards.length : 0 
-    });
+    const total = (b+bonus)*mult;
+    
+    let deductNames = [];
+    if (isTutto && cards.some(c=>c.id==='plusminus')) {
+      const tots = game.players.map(p=>({name:p.name,t:p.turns.reduce((s,t) => s+t.score, 0)}));
+      const max = Math.max(...tots.map(t=>t.t));
+      if (max>0) deductNames = tots.filter(t=>t.t===max).map(t=>t.name);
+    }
+    
+    onRecord({score:total, baseScore:b, bonusScore:total-b, bust:false, tuttoCycles: isTutto ? cards.length : cards.length-1, card: cards[0].id, cards: cards.map(c=>c.id)}, deductNames);
   };
 
-  if (drawnCards.length === 0) {
-    return html`
-      <div style=${{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
-        ${CARDS.map(c => html`
-          <button key=${c.id} onClick=${() => drawCard(c.id)} style=${{background:C.surface2, border:`1px solid ${c.color}`, color:C.text, padding:15, borderRadius:10, fontSize:16}}>
-            ${c.emoji} ${c.label}
-          </button>
-        `)}
+  if(cards.length===0) {
+    return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
+      <div class="anim" style=${{background:C.surface,width:'100%',padding:'20px',borderTopLeftRadius:24,borderTopRightRadius:24,maxHeight:'90vh',overflowY:'auto'}}>
+        <h3 style=${{marginBottom:15}}>Erste Karte ziehen</h3>
+        <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          ${CARDS.map(c=>html`<button key=${c.id} onClick=${()=>selCard(c)} style=${{background:C.surface2,border:`1px solid ${c.color}`,padding:12,borderRadius:10,color:C.text}}>${c.emoji} ${c.label}</button>`)}
+        </div>
+        <button onClick=${onClose} style=${{marginTop:15,width:'100%',padding:12,background:'none',color:C.muted,border:'none'}}>Abbrechen</button>
       </div>
-    `;
+    </div>`;
   }
 
-  const currentCard = drawnCards[drawnCards.length - 1];
-  const canContinue = currentCard.id !== 'feuerwerk' && currentCard.id !== 'kleeblatt' && currentCard.id !== 'stop';
+  const current = cards[cards.length-1];
+  const canContinue = !['feuerwerk','kleeblatt','stop'].includes(current.id);
 
-  return html`
-    <div class="anim" style=${{background:C.surface2, padding:20, borderRadius:12}}>
-      <div style=${{marginBottom:15}}>
-        <div style=${{color:C.muted, fontSize:12}}>Gezogene Karten:</div>
-        <div style=${{display:'flex', gap:5, flexWrap:'wrap', marginTop:5}}>
-          ${drawnCards.map((c, i) => html`<span key=${i} style=${{background:c.color, color:'#fff', padding:'4px 8px', borderRadius:5, fontSize:12}}>${c.emoji} ${c.label}</span>`)}
-        </div>
+  return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
+    <div class="anim" style=${{background:C.surface,width:'100%',padding:'20px',borderTopLeftRadius:24,borderTopRightRadius:24,maxHeight:'90vh',overflowY:'auto'}}>
+      
+      <div style=${{marginBottom:15,display:'flex',gap:5,flexWrap:'wrap'}}>
+        ${cards.map((c,i)=>html`<span key=${i} style=${{background:c.color,padding:'4px 8px',borderRadius:6,fontSize:12,color:'#fff'}}>${c.emoji} ${c.label}</span>`)}
       </div>
 
-      ${currentCard.id === 'stop' ? html`
-        <div style=${{color:C.red, fontSize:20, fontWeight:'bold', textAlign:'center', margin:'20px 0'}}>🛑 Niete! (Zug vorbei)</div>
-        <button onClick=${() => { setBust(true); finishTurn(false); }} style=${{width:'100%', background:C.red, color:'#fff', padding:15, borderRadius:10, border:'none', fontSize:16, fontWeight:'bold'}}>Zug beenden</button>
+      ${current.id==='stop' ? html`
+        <h3 style=${{color:C.red,textAlign:'center',margin:'20px 0'}}>🛑 Niete gezogen!</h3>
+        <button onClick=${()=>finish(true, false)} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:'none',background:C.red,color:'#000',fontSize:15,fontWeight:700}}>Zug beenden (0 Punkte)</button>
       ` : html`
         <div style=${{marginBottom:20}}>
-          <label style=${{display:'block', marginBottom:8, color:C.amber}}>Erwürfelte Punkte (ohne Bonus):</label>
-          <input type="number" placeholder="Z. B. 350" value=${baseScoreStr} onChange=${e => setBaseScoreStr(e.target.value)} style=${{width:'100%', padding:15, fontSize:20, borderRadius:10, border:`1px solid ${C.border}`, background:C.bg, color:C.text, textAlign:'center'}} />
+          <label style=${{fontSize:12,color:C.amber}}>Erwürfelte Punkte (ohne Bonus):</label>
+          <input type="number" value=${base} onChange=${e=>setBase(e.target.value)} placeholder="z.B. 350" style=${{width:'100%',padding:15,marginTop:8,borderRadius:12,background:C.bg,border:`1px solid ${C.border}`,color:C.text,fontSize:20,textAlign:'center'}}/>
         </div>
 
-        <div style=${{display:'flex', gap:10, flexDirection:'column'}}>
-          ${canContinue ? html`
-            <button onClick=${() => { setBust(true); finishTurn(false); }} style=${{background:C.surface2, color:C.red, padding:12, borderRadius:8, border:`1px solid ${C.red}`}}>Niete gewürfelt (Bust)</button>
-            <div style=${{display:'flex', gap:10}}>
-              <button onClick=${() => finishTurn(false)} style=${{flex:1, background:C.surface, color:C.text, padding:15, borderRadius:10, border:`1px solid ${C.border}`}}>Aufhören</button>
-              <button onClick=${() => finishTurn(true)} style=${{flex:1, background:C.amber, color:'#000', padding:15, borderRadius:10, border:'none', fontWeight:'bold'}}>TUTTO! (Aufhören)</button>
+        <div style=${{display:'flex',flexDirection:'column',gap:10}}>
+          <button onClick=${()=>finish(true, false)} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:`1px solid ${C.red}`,background:C.surface2,color:C.red,fontSize:15,fontWeight:700}}>💥 Niete gewürfelt (0 Punkte)</button>
+          
+          <div style=${{display:'flex',gap:10}}>
+            ${current.id !== 'kleeblatt' && html`<button onClick=${()=>finish(false, false)} style=${{flex:1,padding:'13px 16px',borderRadius:14,border:`1px solid ${C.border}`,background:C.surface2,color:C.text,fontSize:15,fontWeight:700}}>Aufhören</button>`}
+            <button onClick=${()=>finish(false, true)} style=${{flex:1,padding:'13px 16px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:15,fontWeight:700}}>${current.id==='kleeblatt' ? 'Zweites TUTTO! (Sieg)' : 'TUTTO! (Aufhören)'}</button>
+          </div>
+          
+          ${canContinue && html`
+            <div style=${{textAlign:'center',color:C.muted,margin:'15px 0 5px',fontSize:13}}>Tutto geschafft? Nächste Karte aufdecken:</div>
+            <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              ${CARDS.map(c=>html`<button key=${c.id} onClick=${()=>selCard(c)} style=${{background:C.bg,border:`1px solid ${c.color}`,padding:10,borderRadius:8,color:C.text,fontSize:13}}>${c.emoji} ${c.label}</button>`)}
             </div>
-            <div style=${{textAlign:'center', margin:'10px 0', color:C.muted}}>Oder nach Tutto weiterwürfeln:</div>
-            <div style=${{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-              ${CARDS.map(c => html`
-                <button key=${c.id} onClick=${() => drawCard(c.id)} style=${{background:C.bg, border:`1px solid ${c.color}`, color:C.text, padding:10, borderRadius:8, fontSize:14}}>+ ${c.emoji} ${c.label}</button>
-              `)}
-            </div>
-          ` : html`
-             <button onClick=${() => finishTurn(currentCard.id === 'feuerwerk')} style=${{width:'100%', background:C.amber, color:'#000', padding:15, borderRadius:10, border:'none', fontSize:16, fontWeight:'bold'}}>Zug abschließen</button>
           `}
         </div>
       `}
+      <button onClick=${onClose} style=${{marginTop:15,width:'100%',padding:12,background:'none',color:C.muted,border:'none'}}>Eintragen abbrechen</button>
     </div>
-  `;
+  </div>`;
 }
 
+// ═══ STATS & MORE ════════════════════════════════════════════════════════════
+
+function Stats({games,roster,tab,setTab,selPlayer,setSelPlayer,cmp,setCmp,onBack}) {
+  const finished = games.filter(g=>g.finished);
+  
+  const pStats = roster.map(name => {
+    const pg = finished.filter(g=>g.players.some(p=>p.name===name));
+    const wins = pg.filter(g=>(g.winner||'').includes(name)).length;
+    const allTurns = pg.flatMap(g=>g.players.find(p=>p.name===name)?.turns||[]);
+    const finalScores = pg.map(g=>total(g.players.find(p=>p.name===name)));
+    const bustTs = allTurns.filter(t=>t.bust);
+    const tuttoTs = allTurns.filter(t=>t.tuttoCycles>0);
+    const multiTuttoTs = allTurns.filter(t=>t.tuttoCycles>1);
+    const scoringTs = allTurns.filter(t=>!t.bust && !t.isDeduction && t.score>0);
+
+    return {
+      name, n: pg.length, wins, winRate: pg.length ? Math.round(wins/pg.length*100) : 0,
+      avgFinal: avg(finalScores),
+      bestFinal:finalScores.length ? Math.max(...finalScores) : 0,
+      worstFinal:finalScores.length ? Math.min(...finalScores) : 0,
+      totalTurns: allTurns.length,
+      bustRate: allTurns.length ? Math.round(bustTs.length/allTurns.length*100) : 0,
+      tuttoRate: allTurns.length ? Math.round(tuttoTs.length/allTurns.length*100) : 0,
+      multiTuttoRate: allTurns.length ? Math.round(multiTuttoTs.length/allTurns.length*100) : 0,
+      avgPerTurn: allTurns.length ? Math.round(allTurns.reduce((s,t)=>s+t.score,0)/allTurns.length) : 0,
+      avgPerScore: scoringTs.length ? Math.round(scoringTs.reduce((s,t)=>s+t.score,0)/scoringTs.length): 0,
+      bestTurn: scoringTs.length ? Math.max(...scoringTs.map(t=>t.score)) : 0,
+      finalScores, allTurns,
+    };
+  }).filter(p=>p.n>0);
+
+  const TABS=[{id:'leaderboard',l:'Rangliste'},{id:'player',l:'Spieler'},{id:'compare',l:'Vergleich'},{id:'turns',l:'Züge'},{id:'history',l:'Historie'}];
+
+  return html`<div style=${{maxWidth:460,margin:'0 auto',padding:'20px 16px 40px',display:'flex',flexDirection:'column',height:'100vh'}}>
+    <div style=${{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
+      <button onClick=${onBack} style=${{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:20,padding:0}}>‹</button>
+      <span style=${{fontSize:22,fontWeight:800}}>Statistiken</span>
+    </div>
+
+    <div style=${{display:'flex',gap:8,overflowX:'auto',paddingBottom:12,scrollbarWidth:'none'}}>
+      ${TABS.map(t=>html`<button key=${t.id} onClick=${()=>setTab(t.id)} style=${{
+        whiteSpace:'nowrap',background:tab===t.id?C.surface2:'none',border:tab===t.id?`1px solid ${C.border}`:'none',
+        borderRadius:14,padding:'8px 14px',color:tab===t.id?C.amber:C.muted,fontWeight:tab===t.id?700:400,
+        fontSize:13,cursor:'pointer'}}>${t.l}</button>`)}
+    </div>
+
+    <div style=${{flex:1,overflowY:'auto'}}>
+      ${finished.length===0 ? html`<div style=${{textAlign:'center',color:C.muted,marginTop:40,fontSize:13}}>Noch keine beendeten Spiele.</div>` : null}
+      
+      ${tab==='leaderboard' && finished.length>0 && html`<div class="anim">
+        ${[...pStats].sort((a,b)=>b.winRate-a.winRate).map((p,i)=>html`<div key=${p.name} style=${{
+          background:C.surface,borderRadius:16,padding:'12px 16px',marginBottom:8,display:'flex',alignItems:'center',gap:12}}>
+          <div style=${{fontSize:18,fontWeight:900,color:i===0?C.amber:i===1?'#94a3b8':i===2?'#b45309':C.muted2,minWidth:24}}>
+            ${i+1}.
+          </div>
+          <div style=${{flex:1}}>
+            <div style=${{fontSize:15,fontWeight:700,color:PCL[roster.indexOf(p.name)%PC.length]}}>${p.name}</div>
+            <div style=${{fontSize:11,color:C.muted,marginTop:2}}>${p.n} Spiele · Ø ${fmtN(p.avgFinal)}</div>
+          </div>
+          <div style=${{textAlign:'right'}}>
+            <div style=${{fontSize:16,fontWeight:800,color:C.text}}>${p.winRate}%</div>
+            <div style=${{fontSize:10,color:C.muted2}}>Siege</div>
+          </div>
+        </div>`)}
+      </div>`}
+
+      ${tab==='player' && finished.length>0 && html`<div class="anim">
+        <select value=${selPlayer||''} onChange=${e=>setSelPlayer(e.target.value)} style=${{
+          width:'100%',padding:'12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:12,
+          color:C.text,fontSize:14,marginBottom:16,outline:'none'}}>
+          <option value="">Spieler auswählen…</option>
+          ${[...pStats].sort((a,b)=>b.n-a.n).map(p=>html`<option key=${p.name} value=${p.name}>${p.name}</option>`)}
+        </select>
+        
+        ${selPlayer && pStats.find(p=>p.name===selPlayer) && (()=>{
+          const selSt = pStats.find(p=>p.name===selPlayer);
+          return html`<div>
+            <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:16}}>
+              <${StatCard} label="Spiele" val=${selSt.n} sub="${selSt.wins} Siege"/>
+              <${StatCard} label="Siegquote" val="${selSt.winRate}%" color=${C.amber}/>
+              <${StatCard} label="Ø Punkte (Ende)" val=${fmtN(selSt.avgFinal)}/>
+              <${StatCard} label="Bester Score" val=${fmtN(selSt.bestFinal)} color=${C.green}/>
+            </div>
+            
+            <div style=${{background:C.surface,borderRadius:16,padding:14,marginBottom:16}}>
+              <div style=${{fontSize:13,fontWeight:700,marginBottom:12}}>Spielweise & Risiko</div>
+              <${RateBar} label="TUTTO-Rate" val=${selSt.tuttoRate} color=${C.green}/>
+              <${RateBar} label="Nieten-Rate" val=${selSt.bustRate} color=${C.red}/>
+              <${RateBar} label="Risiko (Mehrfach-Tutto)" val=${selSt.multiTuttoRate} color=${C.amber}/>
+              <div style=${{marginTop:10,fontSize:11,color:C.muted,lineHeight:1.5}}>
+                ${selSt.multiTuttoRate > 20 ? `${selSt.name} wagt es oft, nach dem ersten TUTTO weiterzuspielen — hohes Risiko!` :
+                  selSt.tuttoRate > selSt.bustRate ? `Mehr TUTTOs als Nieten — ${selSt.name} spielt mutig, aber kontrolliert.` :
+                  selSt.bustRate > 20 ? `Hohe Niete-Rate — ${selSt.name} geht oft zu weit.` :
+                  `Konservative Spielweise — ${selSt.name} nimmt lieber sichere Punkte mit.`}
+              </div>
+            </div>
+
+            ${selSt.finalScores.length>1 && html`<div style=${{background:C.surface,borderRadius:16,padding:14}}>
+              <div style=${{fontSize:13,fontWeight:700,marginBottom:8}}>Endpunktzahl-Verlauf</div>
+              <div style=${{height:140}}>
+                <${ResponsiveContainer} width="100%" height="100%">
+                  <${BarChart} data=${selSt.finalScores.map((s,i)=>({i:i+1,score:s}))}>
+                    <${XAxis} dataKey="i" tick=${{fill:C.muted,fontSize:10}} axisLine=${false} tickLine=${false}/>
+                    <${Tooltip} contentStyle=${{background:C.surface2,border:'none',borderRadius:8,fontSize:12,color:C.text}} cursor=${{fill:C.border}}/>
+                    <${Bar} dataKey="score" fill=${PCL[roster.indexOf(selSt.name)%PC.length]} radius=${[4,4,0,0]}/>
+                  </${BarChart}>
+                </${ResponsiveContainer}>
+              </div>
+            </div>`}
+          </div>`;
+        })()}
+      </div>`}
+
+      ${tab==='compare' && finished.length>0 && html`<div class="anim">
+        <div style=${{display:'flex',gap:8,marginBottom:16}}>
+          <select value=${cmp[0]||''} onChange=${e=>setCmp([e.target.value,cmp[1]])} style=${{
+            flex:1,padding:'12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:12,color:C.text,fontSize:13,outline:'none'}}>
+            <option value="">Spieler 1…</option>${pStats.map(p=>html`<option key=${p.name} value=${p.name}>${p.name}</option>`)}
+          </select>
+          <select value=${cmp[1]||''} onChange=${e=>setCmp([cmp[0],e.target.value])} style=${{
+            flex:1,padding:'12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:12,color:C.text,fontSize:13,outline:'none'}}>
+            <option value="">Spieler 2…</option>${pStats.map(p=>html`<option key=${p.name} value=${p.name}>${p.name}</option>`)}
+          </select>
+        </div>
+        
+        ${cmp[0]&&cmp[1]&&cmp[0]!==cmp[1] ? (()=>{
+          const p1 = pStats.find(p=>p.name===cmp[0]);
+          const p2 = pStats.find(p=>p.name===cmp[1]);
+          const comps = [
+            {l:'Siegquote',     v1:`${p1.winRate}%`, v2:`${p2.winRate}%`, n1:p1.winRate, n2:p2.winRate},
+            {l:'Ø Punkte Ende', v1:fmtN(p1.avgFinal), v2:fmtN(p2.avgFinal), n1:p1.avgFinal, n2:p2.avgFinal},
+            {l:'TUTTO-Rate',    v1:`${p1.tuttoRate}%`, v2:`${p2.tuttoRate}%`, n1:p1.tuttoRate, n2:p2.tuttoRate},
+            {l:'Nieten-Rate',   v1:`${p1.bustRate}%`, v2:`${p2.bustRate}%`, n1:p2.bustRate, n2:p1.bustRate, inv:true},
+            {l:'Bester Zug',    v1:fmtN(p1.bestTurn), v2:fmtN(p2.bestTurn), n1:p1.bestTurn, n2:p2.bestTurn},
+          ];
+          return html`<div style=${{background:C.surface,borderRadius:16,padding:'8px 16px'}}>
+            ${comps.map((c,i)=>html`<div key=${i} style=${{display:'flex',justifyContent:'space-between',alignItems:'center',
+              padding:'12px 0',borderBottom:i<comps.length-1?`1px solid ${C.border}`:'none'}}>
+              <div style=${{flex:1,fontWeight:c.n1>c.n2?700:400,color:c.n1>c.n2?PCL[roster.indexOf(p1.name)%PC.length]:C.muted,fontSize:14}}>${c.v1}</div>
+              <div style=${{fontSize:11,color:C.muted2,textTransform:'uppercase',letterSpacing:1,flex:'0 0 100px',textAlign:'center'}}>${c.l}</div>
+              <div style=${{flex:1,textAlign:'right',fontWeight:c.n2>c.n1?700:400,color:c.n2>c.n1?PCL[roster.indexOf(p2.name)%PC.length]:C.muted,fontSize:14}}>${c.v2}</div>
+            </div>`)}
+          </div>`;
+        })() : html`<div style=${{textAlign:'center',color:C.muted,marginTop:20,fontSize:13}}>Wähle zwei verschiedene Spieler aus.</div>`}
+      </div>`}
+
+      ${tab==='turns' && finished.length>0 && html`<div class="anim">
+        <div style=${{background:C.surface,borderRadius:16,padding:'12px 16px'}}>
+          <div style=${{fontSize:11,color:C.muted2,letterSpacing:2,textTransform:'uppercase',marginBottom:12,fontWeight:700}}>Top 10 Züge</div>
+          ${(()=>{
+            const all = finished.flatMap(g=>g.players.flatMap(p=>p.turns.map(t=>({...t,name:p.name,date:g.date}))));
+            all.sort((a,b)=>b.score-a.score);
+            return all.slice(0,10).map((t,i)=>{
+              const ci=roster.indexOf(t.name);
+              const card=CARDS.find(c=>c.id===t.card);
+              return html`<div key=${i} style=${{display:'flex',alignItems:'center',gap:10,
+                padding:'7px 0',borderBottom:i<9?`1px solid ${C.border}`:'none'}}>
+                <div style=${{fontSize:14,fontWeight:900,color:i===0?C.amberL:C.muted2,minWidth:22}}>${i+1}.</div>
+                <div style=${{flex:1,minWidth:0}}>
+                  <span style=${{color:PCL[ci%PC.length],fontSize:13,fontWeight:600}}>${t.name}</span>
+                  ${t.tuttoCycles>0 && html`<span style=${{fontSize:9,background:'#052e16',color:'#86efac',borderRadius:4,padding:'2px 5px',marginLeft:6}}>${t.tuttoCycles===1?'TUTTO':`${t.tuttoCycles}× TUTTO`}</span>`}
+                  <div style=${{fontSize:10,color:C.muted2}}>${t.date}</div>
+                </div>
+                <div style=${{display:'flex',alignItems:'center',gap:6}}>
+                  ${card && html`<span style=${{fontSize:13}} title=${card.label}>${card.emoji}</span>`}
+                  <span style=${{fontSize:15,fontWeight:800,color:C.text}}>+${fmtN(t.score)}</span>
+                </div>
+              </div>`;
+            });
+          })()}
+        </div>
+      </div>`}
+
+      ${tab==='history' && finished.length>0 && html`<div class="anim">
+        ${[...finished].reverse().map(g=>{
+          const tots = g.players.map(p=>total(p));
+          const maxT = Math.max(...tots);
+          return html`<div key=${g.id} style=${{background:C.surface,borderRadius:16,padding:'12px 16px',marginBottom:10}}>
+            <div style=${{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <span style=${{fontSize:12,color:C.muted}}>${g.date}</span>
+              ${g.winner && html`<span style=${{fontSize:12,color:C.amber,fontWeight:700}}>🏆 ${g.winner}</span>`}
+            </div>
+            ${g.players.map((p,i)=>html`<div key=${p.name} style=${{display:'flex',justifyContent:'space-between',padding:'4px 0',
+              borderBottom:i<g.players.length-1?`1px solid ${C.border}`:'none'}}>
+              <span style=${{fontSize:13,color:tots[i]===maxT?PCL[roster.indexOf(p.name)%PC.length]:C.muted}}>${p.name}</span>
+              <span style=${{fontSize:13,fontWeight:tots[i]===maxT?700:400,color:tots[i]===maxT?C.text:C.muted}}>${fmtN(tots[i])}</span>
+            </div>`)}
+          </div>`;
+        })}
+      </div>`}
+    </div>
+  </div>`;
+}
+
+// ═══ GITHUB SETTINGS ═════════════════════════════════════════════════════════
+
+function GhSettings({initial,onSave,onBack}) {
+  const [token, setToken] = useState(initial?.token||'');
+  const [owner, setOwner] = useState(initial?.owner||'');
+  const [repo,  setRepo]  = useState(initial?.repo||'');
+  const [testing, setTesting] = useState(false);
+  const [res, setRes] = useState(null);
+
+  const test = async () => {
+    setTesting(true); setRes(null);
+    try {
+      const r=await fetch(`https://api.github.com/repos/${owner}/${repo}`,{headers:{Authorization:`token ${token}`}});
+      if (r.ok) setRes({ok:true,msg:'Zugriff erfolgreich!'});
+      else setRes({ok:false,msg:`Fehler: ${r.status}`});
+    } catch(e) { setRes({ok:false,msg:'Netzwerkfehler'}); }
+    setTesting(false);
+  };
+
+  return html`<div style=${{maxWidth:460,margin:'0 auto',padding:'20px 16px'}}>
+    <div style=${{display:'flex',alignItems:'center',gap:12,marginBottom:24}}>
+      <button onClick=${onBack} style=${{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:20,padding:0}}>‹</button>
+      <span style=${{fontSize:22,fontWeight:800}}>GitHub Sync</span>
+    </div>
+    <div style=${{fontSize:13,color:C.muted,lineHeight:1.5,marginBottom:20}}>
+      Speichere Spiele und Statistiken automatisch in einem privaten GitHub-Repository, um sie über mehrere Geräte hinweg zu synchronisieren.
+    </div>
+    
+    <label style=${{display:'block',fontSize:11,color:C.muted2,fontWeight:700,textTransform:'uppercase',marginBottom:4}}>Token (mit repo scope)</label>
+    <input type="password" value=${token} onChange=${e=>setToken(e.target.value)} placeholder="ghp_..."
+      style=${{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:'11px',color:C.text,fontSize:14,marginBottom:12,outline:'none'}}/>
+      
+    <label style=${{display:'block',fontSize:11,color:C.muted2,fontWeight:700,textTransform:'uppercase',marginBottom:4}}>GitHub Benutzername</label>
+    <input value=${owner} onChange=${e=>setOwner(e.target.value)} placeholder="z.B. maxmustermann"
+      style=${{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:'11px',color:C.text,fontSize:14,marginBottom:12,outline:'none'}}/>
+      
+    <label style=${{display:'block',fontSize:11,color:C.muted2,fontWeight:700,textTransform:'uppercase',marginBottom:4}}>Repository Name</label>
+    <input value=${repo} onChange=${e=>setRepo(e.target.value)} placeholder="z.B. tutto-data"
+      style=${{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:'11px',color:C.text,fontSize:14,outline:'none'}}/>
+      
+    <div style=${{display:'flex',gap:10,marginTop:8}}>
+      <button onClick=${test} disabled=${testing||!token||!owner||!repo}
+        style=${{flex:1,background:C.surface2,border:`1px solid ${C.border}`,borderRadius:12,padding:'11px',
+          color:C.text,cursor:'pointer',fontSize:14,fontWeight:600,opacity:(!token||!owner||!repo)?0.4:1}}>
+        ${testing?'…':'Testen'}
+      </button>
+      <button onClick=${()=>onSave({token,owner,repo})} disabled=${!token||!owner||!repo}
+        style=${{flex:2,background:C.amber,border:'none',borderRadius:12,padding:'11px',color:'#000',
+          cursor:'pointer',fontSize:14,fontWeight:700,opacity:(!token||!owner||!repo)?0.4:1}}>
+        Aktivieren
+      </button>
+    </div>
+    ${res && html`<div style=${{marginTop:12,padding:'10px 14px',borderRadius:10,
+      background:res.ok?'#052e16':'#2d0a0a',color:res.ok?C.green:C.red,fontSize:13}}>${res.msg}</div>`}
+    
+    ${initial?.token && html`<button onClick=${()=>onSave(null)} style=${{background:'none',border:'none',
+      color:C.muted,cursor:'pointer',fontSize:12,marginTop:24,width:'100%',textAlign:'center'}}>
+      Sync deaktivieren & löschen
+    </button>`}
+  </div>`;
+}
+
+// ═══ BOOTSTRAP ═══════════════════════════════════════════════════════════════
+
 const root = createRoot(document.getElementById('root'));
-root.render(html`<${App} />`);
+root.render(html`<${App}/>`);
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+}
 </script>
 </body>
 </html>
