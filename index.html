@@ -471,94 +471,216 @@ function Game({game, roster, onTurn, onFinish, onUndo, onAbort, onBack}) {
   </div>`;
 }
 
-// ═══ TURN MODAL (NEU, MULTI-CARD & MANUELL) ══════════════════════════════════
+// ═══ TURN MODAL (NEU, SCHRITTWEISE & FESTE PUNKTE) ═══════════════════════════
 
 function TurnModal({game, roster, onRecord, onClose}) {
-  const [cards, setCards] = useState([]);
+  const [step, setStep] = useState('draw'); // 'draw' | 'play' | 'interim'
+  const [history, setHistory] = useState([]);
+  const [currentCard, setCurrentCard] = useState(null);
   const [base, setBase] = useState('');
+  const [deductNames, setDeductNames] = useState([]);
   
-  const selCard = c => setCards([...cards, c]);
+  const turnScore = history.reduce((s, h) => s + h.score, 0);
   
-  const finish = (isBust, isTutto) => {
-    if(isBust) {
-      onRecord({score:0, baseScore:0, bonusScore:0, bust:true, tuttoCycles: cards.length-1, card: cards[0].id, cards: cards.map(c=>c.id)});
-      return;
-    }
-    const current = cards[cards.length-1];
-    if (isTutto && current.id === 'kleeblatt') {
-      onRecord({score:TARGET, baseScore:0, bonusScore:0, bust:false, tuttoCycles:2, card: cards[0].id, cards: cards.map(c=>c.id), instant:true});
-      return;
-    }
-
-    const b = parseInt(base)||0;
-    let bonus = 0; let mult = 1;
-    
-    if (isTutto || current.id==='feuerwerk') {
-      cards.forEach(c=>{
-        if(c.id.startsWith('bonus')) bonus += parseInt(c.id.replace('bonus',''));
-        if(c.id==='x2') mult *= 2;
-      });
-    }
-    const total = (b+bonus)*mult;
-    
-    let deductNames = [];
-    if (isTutto && cards.some(c=>c.id==='plusminus')) {
-      const tots = game.players.map(p=>({name:p.name,t:p.turns.reduce((s,t) => s+t.score, 0)}));
-      const max = Math.max(...tots.map(t=>t.t));
-      if (max>0) deductNames = tots.filter(t=>t.t===max).map(t=>t.name);
-    }
-    
-    onRecord({score:total, baseScore:b, bonusScore:total-b, bust:false, tuttoCycles: isTutto ? cards.length : cards.length-1, card: cards[0].id, cards: cards.map(c=>c.id)}, deductNames);
+  const selCard = c => {
+    setCurrentCard(c);
+    setBase('');
+    setStep('play');
   };
 
-  if(cards.length===0) {
+  const finishTurn = (hist, isBust) => {
+    const totalScore = hist.reduce((s,h)=>s+h.score, 0);
+    const totalBase = hist.reduce((s,h)=>s+h.baseScore, 0);
+    const totalBonus = hist.reduce((s,h)=>s+h.bonusScore, 0);
+    
+    // Bei Niete werden auch Abzüge nicht gewertet, die in diesem Zug gesammelt wurden
+    const finalDeduct = isBust ? [] : deductNames;
+
+    onRecord({
+      score: isBust ? 0 : totalScore,
+      baseScore: isBust ? 0 : totalBase,
+      bonusScore: isBust ? 0 : totalBonus,
+      bust: isBust,
+      tuttoCycles: hist.filter(h=>h.isTutto).length,
+      card: hist.length > 0 ? hist[0].card : (currentCard ? currentCard.id : null),
+      cards: hist.map(h=>h.card),
+      cardDetails: hist
+    }, finalDeduct);
+  };
+
+  const handleBust = () => {
+    // Fügt die aktuelle Karte als gescheitert zur Historie hinzu und beendet den Zug
+    const newHist = [...history, {
+      card: currentCard.id, score: 0, baseScore: 0, bonusScore: 0, isTutto: false
+    }];
+    finishTurn(newHist, true);
+  };
+
+  const handleStop = () => {
+    const b = parseInt(base) || 0;
+    const newHist = [...history, {
+      card: currentCard.id, baseScore: b, bonusScore: 0, score: b, isTutto: false
+    }];
+    finishTurn(newHist, false);
+  };
+
+  const handleTutto = () => {
+    const b = parseInt(base) || 0;
+    let cardScore = 0, baseSc = b, bonusSc = 0;
+    let newDeduct = [...deductNames];
+    
+    if (currentCard.id.startsWith('bonus')) {
+      const bonusVal = parseInt(currentCard.id.replace('bonus',''));
+      bonusSc = bonusVal;
+      cardScore = b + bonusVal;
+    } 
+    else if (currentCard.id === 'x2') {
+      // x2 verdoppelt alle bisher in diesem Zug gesammelten Punkte plus die neuen Base-Punkte
+      baseSc = b;
+      cardScore = turnScore + (2 * b);
+      bonusSc = cardScore - baseSc;
+    } 
+    else if (currentCard.id === 'strasse') {
+      baseSc = 0; bonusSc = 2000; cardScore = 2000;
+    } 
+    else if (currentCard.id === 'plusminus') {
+      baseSc = 0; bonusSc = 1000; cardScore = 1000;
+      // Führende ermitteln und für den Abzug merken
+      const tots = game.players.map(p=>({name:p.name,t:p.turns.reduce((s,t) => s+t.score, 0)}));
+      const max = Math.max(...tots.map(t=>t.t));
+      if (max > 0) {
+        newDeduct = [...new Set([...newDeduct, ...tots.filter(t=>t.t===max).map(t=>t.name)])];
+      }
+    }
+    
+    setDeductNames(newDeduct);
+    setHistory([...history, {
+      card: currentCard.id, baseScore: baseSc, bonusScore: bonusSc, score: cardScore, isTutto: true
+    }]);
+    setStep('interim');
+  };
+
+  const handleFeuerwerk = () => {
+    // Feuerwerk endet immer sofort nach Eingabe der Punkte
+    const b = parseInt(base) || 0;
+    finishTurn([...history, {
+      card: currentCard.id, baseScore: b, bonusScore: 0, score: b, isTutto: false
+    }], false);
+  };
+  
+  const handleKleeblatt = () => {
+    // Sofortiger Sieg (Beendet das Spiel direkt)
+    const newHist = [...history, {
+      card: currentCard.id, baseScore: 0, bonusScore: 0, score: TARGET, isTutto: true
+    }];
+    onRecord({
+      score: TARGET, baseScore: 0, bonusScore: 0, bust: false,
+      tuttoCycles: newHist.filter(h=>h.isTutto).length,
+      card: newHist[0].card, cards: newHist.map(h=>h.card),
+      cardDetails: newHist, instant: true
+    }, []);
+  };
+
+  // --- RENDERING: Karten ziehen ---
+  if(step === 'draw') {
     return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
       <div class="anim" style=${{background:C.surface,width:'100%',padding:'20px',borderTopLeftRadius:24,borderTopRightRadius:24,maxHeight:'90vh',overflowY:'auto'}}>
-        <h3 style=${{marginBottom:15}}>Erste Karte ziehen</h3>
+        <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:15}}>
+          <h3 style=${{margin:0}}>${history.length===0 ? 'Erste Karte ziehen' : 'Nächste Karte ziehen'}</h3>
+          ${history.length > 0 && html`<div style=${{color:C.amber,fontWeight:700}}>Punkte: ${turnScore}</div>`}
+        </div>
+        
+        ${history.length > 0 && html`
+          <div style=${{marginBottom:15,display:'flex',gap:5,flexWrap:'wrap'}}>
+            ${history.map((h,i)=>{
+              const c = CARDS.find(x=>x.id===h.card);
+              return html`<span key=${i} style=${{background:c.color,padding:'4px 8px',borderRadius:6,fontSize:12,color:'#fff'}}>${c.emoji} ${c.label}</span>`;
+            })}
+          </div>
+        `}
+
         <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
           ${CARDS.map(c=>html`<button key=${c.id} onClick=${()=>selCard(c)} style=${{background:C.surface2,border:`1px solid ${c.color}`,padding:12,borderRadius:10,color:C.text}}>${c.emoji} ${c.label}</button>`)}
         </div>
-        <button onClick=${onClose} style=${{marginTop:15,width:'100%',padding:12,background:'none',color:C.muted,border:'none'}}>Abbrechen</button>
+        <button onClick=${history.length>0 ? ()=>finishTurn(history, false) : onClose} style=${{marginTop:15,width:'100%',padding:12,background:'none',color:C.muted,border:'none'}}>
+          ${history.length>0 ? 'Zug beenden & eintragen' : 'Abbrechen'}
+        </button>
       </div>
     </div>`;
   }
 
-  const current = cards[cards.length-1];
-  const canContinue = !['feuerwerk','kleeblatt','stop'].includes(current.id);
+  // --- RENDERING: Zwischenstand nach Tutto ---
+  if(step === 'interim') {
+    return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
+      <div class="anim" style=${{background:C.surface,width:'100%',padding:'24px 20px',borderTopLeftRadius:24,borderTopRightRadius:24}}>
+        <div style=${{textAlign:'center',marginBottom:24}}>
+          <div style=${{color:C.amber,fontSize:24,fontWeight:900,marginBottom:4}}>TUTTO! 🎉</div>
+          <div style=${{color:C.text,fontSize:16}}>Bisher im Zug gesammelt: <span style=${{fontWeight:800}}>${turnScore}</span></div>
+        </div>
+        <div style=${{display:'flex',flexDirection:'column',gap:12}}>
+          <button onClick=${()=>finishTurn(history, false)} style=${{width:'100%',padding:'14px',borderRadius:14,border:`1px solid ${C.border}`,background:C.surface2,color:C.text,fontSize:16,fontWeight:700}}>Aufhören & Punkte sichern</button>
+          <button onClick=${()=>setStep('draw')} style=${{width:'100%',padding:'14px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:16,fontWeight:800}}>Weiterwürfeln (Neue Karte)</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // --- RENDERING: Aktuelle Karte spielen ---
+  const isFixed = ['strasse', 'plusminus', 'kleeblatt'].includes(currentCard.id);
+  const isFeuerwerk = currentCard.id === 'feuerwerk';
+  const isStop = currentCard.id === 'stop';
 
   return html`<div style=${{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'flex-end',zIndex:100}}>
     <div class="anim" style=${{background:C.surface,width:'100%',padding:'20px',borderTopLeftRadius:24,borderTopRightRadius:24,maxHeight:'90vh',overflowY:'auto'}}>
       
-      <div style=${{marginBottom:15,display:'flex',gap:5,flexWrap:'wrap'}}>
-        ${cards.map((c,i)=>html`<span key=${i} style=${{background:c.color,padding:'4px 8px',borderRadius:6,fontSize:12,color:'#fff'}}>${c.emoji} ${c.label}</span>`)}
+      <div style=${{marginBottom:20,display:'flex',gap:5,flexWrap:'wrap'}}>
+        ${history.map((h,i)=>{
+          const c = CARDS.find(x=>x.id===h.card);
+          return html`<span key=${i} style=${{background:c.color,padding:'4px 8px',borderRadius:6,fontSize:12,color:'#fff'}}>${c.emoji} ${c.label}</span>`;
+        })}
+        <span style=${{background:currentCard.color,padding:'4px 8px',borderRadius:6,fontSize:12,color:'#fff',border:'2px solid #fff'}}>${currentCard.emoji} ${currentCard.label} (Aktuell)</span>
       </div>
 
-      ${current.id==='stop' ? html`
+      ${isStop ? html`
         <h3 style=${{color:C.red,textAlign:'center',margin:'20px 0'}}>🛑 Niete gezogen!</h3>
-        <button onClick=${()=>finish(true, false)} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:'none',background:C.red,color:'#000',fontSize:15,fontWeight:700}}>Zug beenden (0 Punkte)</button>
+        <button onClick=${handleBust} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:'none',background:C.red,color:'#000',fontSize:15,fontWeight:700}}>Zug beenden (0 Punkte)</button>
+      ` : isFixed ? html`
+        <div style=${{marginBottom:24,textAlign:'center',padding:'20px',background:C.surface2,borderRadius:12}}>
+          <div style=${{fontSize:14,color:C.muted}}>Vorgabe für diese Karte:</div>
+          <div style=${{fontSize:18,fontWeight:800,color:C.amber,marginTop:8}}>
+            ${currentCard.id==='strasse' ? 'Punkte: 2000 (Fest)' : 
+              currentCard.id==='plusminus' ? 'Punkte: 1000 (Fest) & 1000 Abzug für Führende' : 
+              'Ziel: 2. Tutto in Folge -> Sofortiger Sieg!'}
+          </div>
+        </div>
+        
+        <div style=${{display:'flex',flexDirection:'column',gap:12}}>
+          <button onClick=${handleBust} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:`1px solid ${C.red}`,background:C.surface2,color:C.red,fontSize:15,fontWeight:700}}>💥 Niete (Bust)</button>
+          ${currentCard.id === 'kleeblatt' 
+            ? html`<button onClick=${handleKleeblatt} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:15,fontWeight:700}}>Kleeblatt geschafft (SIEG!)</button>`
+            : html`<button onClick=${handleTutto} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:15,fontWeight:700}}>TUTTO geschafft!</button>`
+          }
+        </div>
       ` : html`
         <div style=${{marginBottom:20}}>
-          <label style=${{fontSize:12,color:C.amber}}>Erwürfelte Punkte (ohne Bonus):</label>
+          <label style=${{fontSize:13,color:C.amber,fontWeight:700}}>${isFeuerwerk ? 'Punkte im Feuerwerk erwürfelt:' : 'Erwürfelte Punkte (ohne Bonus):'}</label>
           <input type="number" value=${base} onChange=${e=>setBase(e.target.value)} placeholder="z.B. 350" style=${{width:'100%',padding:15,marginTop:8,borderRadius:12,background:C.bg,border:`1px solid ${C.border}`,color:C.text,fontSize:20,textAlign:'center'}}/>
         </div>
 
         <div style=${{display:'flex',flexDirection:'column',gap:10}}>
-          <button onClick=${()=>finish(true, false)} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:`1px solid ${C.red}`,background:C.surface2,color:C.red,fontSize:15,fontWeight:700}}>💥 Niete gewürfelt (0 Punkte)</button>
-          
-          <div style=${{display:'flex',gap:10}}>
-            ${current.id !== 'kleeblatt' && html`<button onClick=${()=>finish(false, false)} style=${{flex:1,padding:'13px 16px',borderRadius:14,border:`1px solid ${C.border}`,background:C.surface2,color:C.text,fontSize:15,fontWeight:700}}>Aufhören</button>`}
-            <button onClick=${()=>finish(false, true)} style=${{flex:1,padding:'13px 16px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:15,fontWeight:700}}>${current.id==='kleeblatt' ? 'Zweites TUTTO! (Sieg)' : 'TUTTO! (Aufhören)'}</button>
-          </div>
-          
-          ${canContinue && html`
-            <div style=${{textAlign:'center',color:C.muted,margin:'15px 0 5px',fontSize:13}}>Tutto geschafft? Nächste Karte aufdecken:</div>
-            <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              ${CARDS.map(c=>html`<button key=${c.id} onClick=${()=>selCard(c)} style=${{background:C.bg,border:`1px solid ${c.color}`,padding:10,borderRadius:8,color:C.text,fontSize:13}}>${c.emoji} ${c.label}</button>`)}
+          ${isFeuerwerk ? html`
+            <button onClick=${handleFeuerwerk} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:15,fontWeight:700}}>Zug abschließen (Punkte sichern)</button>
+          ` : html`
+            <button onClick=${handleBust} style=${{width:'100%',padding:'13px 16px',borderRadius:14,border:`1px solid ${C.red}`,background:C.surface2,color:C.red,fontSize:15,fontWeight:700}}>💥 Niete gewürfelt (0 Punkte)</button>
+            <div style=${{display:'flex',gap:10}}>
+              <button onClick=${handleStop} style=${{flex:1,padding:'13px 16px',borderRadius:14,border:`1px solid ${C.border}`,background:C.surface2,color:C.text,fontSize:15,fontWeight:700}}>Aufhören</button>
+              <button onClick=${handleTutto} style=${{flex:1,padding:'13px 16px',borderRadius:14,border:'none',background:C.amber,color:'#000',fontSize:15,fontWeight:700}}>TUTTO!</button>
             </div>
           `}
         </div>
       `}
-      <button onClick=${onClose} style=${{marginTop:15,width:'100%',padding:12,background:'none',color:C.muted,border:'none'}}>Eintragen abbrechen</button>
+      
+      <button onClick=${()=>setStep('draw')} style=${{marginTop:15,width:'100%',padding:12,background:'none',color:C.muted,border:'none'}}>Zurück zur Kartenauswahl</button>
     </div>
   </div>`;
 }
